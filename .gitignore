@@ -12,7 +12,6 @@ ENV/
 .ruff_cache/
 .coverage
 htmlcov/
-.python-version
 
 # Node.js
 node_modules/
