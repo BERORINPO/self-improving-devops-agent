@@ -1,0 +1,85 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: web (Next.js / TypeScript / biome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect web package
+        id: detect
+        shell: bash
+        run: |
+          if [ -f apps/ops-console/package.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false (apps/ops-console not present yet — skipping)"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.exists == 'true'
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/ops-console/package-lock.json
+
+      - name: npm ci
+        if: steps.detect.outputs.exists == 'true'
+        working-directory: apps/ops-console
+        run: npm ci
+
+      - name: typecheck (tsc --noEmit)
+        if: steps.detect.outputs.exists == 'true'
+        working-directory: apps/ops-console
+        run: npx tsc --noEmit
+
+      - name: lint + format check (biome check)
+        if: steps.detect.outputs.exists == 'true'
+        working-directory: apps/ops-console
+        run: npm run check
+
+  python:
+    name: python (ADK agent / syntax + deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect python package
+        id: detect
+        shell: bash
+        run: |
+          if [ -f packages/agent/requirements.txt ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false (packages/agent not present yet — skipping)"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.detect.outputs.exists == 'true'
+        with:
+          python-version: '3.12.7'
+          cache: 'pip'
+          cache-dependency-path: packages/agent/requirements.txt
+
+      - name: pip install (dep resolution check)
+        if: steps.detect.outputs.exists == 'true'
+        working-directory: packages/agent
+        run: pip install -r requirements.txt
+
+      - name: py_compile (syntax check)
+        if: steps.detect.outputs.exists == 'true'
+        working-directory: packages/agent
+        shell: bash
+        run: |
+          find src -name '*.py' -print0 | xargs -0 python -m py_compile
