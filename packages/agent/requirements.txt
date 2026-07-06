@@ -17,5 +17,9 @@ fastapi>=0.115,<1.0
 uvicorn[standard]>=0.30,<1.0
 # Cloud Logging read — the grounded evidence source the agent tails.
 google-cloud-logging>=3.10,<4.0
+# Cloud Run Admin API — read target service status + deployed env config.
+google-cloud-run>=0.10,<1.0
+# HTTP client — probe the target service /health (recovery verification).
+httpx>=0.27,<1.0
 # (google-genai is pulled in transitively by google-adk; not pinned here to
 #  avoid resolver conflicts. `from google import genai` works via ADK.)
