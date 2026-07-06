@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 _UI_HTML = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
@@ -160,3 +160,51 @@ def approve(req: ApproveRequest) -> dict:
     health_url = req.target_health_url or os.environ.get("TARGET_HEALTH_URL", "")
     verify = verify_recovery(health_url)
     return {"merge": merge, "apply": applied, "verify": verify}
+
+
+@app.get("/incident/stream")
+async def incident_stream() -> StreamingResponse:
+    """Server-Sent Events stream of the agent's steps as they happen (live demo)."""
+    from agents.agent import run_incident_events
+
+    health_url = os.environ.get("TARGET_HEALTH_URL", "")
+    incident_text = (
+        "Incident: the Cloud Run service 'sida-target' is reported unhealthy. "
+        f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
+    )
+
+    async def gen():
+        yield "retry: 60000\n\n"
+        try:
+            async for ev in run_incident_events(incident_text):
+                if ev.get("type") == "final":
+                    ev = {
+                        "type": "final",
+                        "diagnosis": _parse_diagnosis(ev["final"]),
+                        "raw_final": ev["final"],
+                    }
+                yield f"data: {json.dumps(ev)}\n\n"
+        except Exception as e:  # noqa: BLE001
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        yield 'data: {"type": "done"}\n\n'
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@app.post("/reset")
+def reset() -> dict:
+    """Re-arm the demo: break the target again and reset the config repo (for repeated judging)."""
+    from agents.recovery import inject_failure, reset_repo_config
+
+    return {
+        "inject": inject_failure("sida-target", "DATABASE_URL"),
+        "repo_reset": reset_repo_config(),
+    }

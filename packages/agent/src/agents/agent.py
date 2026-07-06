@@ -95,3 +95,35 @@ async def run_incident(incident_text: str, model: str = DEFAULT_MODEL) -> dict:
         if event.is_final_response() and event.content and event.content.parts:
             final_text = "".join(p.text or "" for p in event.content.parts)
     return {"final": final_text, "steps": steps}
+
+
+async def run_incident_events(incident_text: str, model: str = DEFAULT_MODEL):
+    """Async generator: yields each step as it happens (for live SSE streaming).
+
+    Yields dicts: {"type": "tool_call"|"tool_result"|"final", ...}.
+    """
+    agent = build_agent(model)
+    session_service = InMemorySessionService()
+    runner = Runner(app_name=APP_NAME, agent=agent, session_service=session_service)
+    user_id = "demo"
+    session_id = uuid.uuid4().hex
+    await session_service.create_session(
+        app_name=APP_NAME, user_id=user_id, session_id=session_id
+    )
+    message = types.Content(role="user", parts=[types.Part(text=incident_text)])
+    async for event in runner.run_async(
+        user_id=user_id, session_id=session_id, new_message=message
+    ):
+        for call in event.get_function_calls() or []:
+            yield {
+                "type": "tool_call",
+                "name": call.name,
+                "args": {k: str(v) for k, v in (call.args or {}).items()},
+            }
+        for resp in event.get_function_responses() or []:
+            yield {"type": "tool_result", "name": resp.name}
+        if event.is_final_response() and event.content and event.content.parts:
+            yield {
+                "type": "final",
+                "final": "".join(p.text or "" for p in event.content.parts),
+            }

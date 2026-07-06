@@ -107,3 +107,10 @@ GCP 基盤＋2 サービスの Cloud Run デプロイ＋smoke 完了。
 2. **`/healthz` は GFE 予約パス**: Cloud Run のフロントが `/healthz` を横取りして GFE 404 を返し、コンテナに届かない。**health エンドポイントは `/health` を使う**（`/healthz` は使わない）
 3. **並行 `--source` デプロイの AR リポジトリ競合**: 初回は 2 本同時に `cloud-run-source-deploy` を作ろうとして `ALREADY_EXISTS`。1 本目成功後は解消（初回だけ直列化すれば安全）
 4. **FastAPI の戻り値注釈に `Response` サブクラスの union 禁止**: `-> JSONResponse | dict` はルート登録時に落ちる。注釈を外すか単一 `Response` 型に
+
+## Polish 実績（SSE ライブ配信 + 自己リセット）
+
+- **SSE ライブ配信が Cloud Run で動作**: `/incident/stream`（GET, EventSource）が agent の各ステップを逐次配信。実測でイベントが 8-22s に分散到達（末尾一括バッファなし）。効いたヘッダ: `Cache-Control: no-cache, no-transform` + `X-Accel-Buffering: no`。EventSource 自動再接続は `retry: 60000` + `done` イベントで client 側 close して抑止。
+- **自己リセット**: `/reset`（POST）が target を再度 503 に + config repo を壊れた状態に戻す → 審査員が何度でも「検知→修正→復旧」を再現可能。UI に「Reset demo」ボタン。
+- **判明した罠**: bodyless POST を curl `-X POST`（body なし）で叩くと GFE が **HTTP 411 (Length Required)** を返す。ブラウザ fetch は Content-Length:0 を自動送信するため UI では問題なし。curl テスト時は `-d ""` で回避。
+- **フルサイクル Cloud Run 検証済**: SSE 診断→実PR / `/approve`（merge→run_v2 適用→503→200）/ `/reset`（再武装）全て本番で通過。

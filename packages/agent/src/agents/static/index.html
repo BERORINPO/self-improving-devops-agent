@@ -104,7 +104,8 @@
           <button class="btn approve" id="approveBtn" onclick="approve()">✓ Approve &amp; deploy fix</button>
           <div class="hint">Read / diagnose / propose = autonomous. Merge + deploy = your call.</div>
         </div>
-        <div id="resetHint" class="hint hidden">Demo reset: run <code>scripts/target-incident.ps1 -Action inject</code></div>
+        <button class="btn" id="resetBtn" onclick="resetDemo()"
+          style="margin-top:10px;background:#26324a;color:var(--muted);border:1px solid var(--line)">↺ Reset demo (re-arm incident)</button>
       </div>
 
       <div class="card hidden" id="diagCard" style="margin-top:16px">
@@ -167,29 +168,37 @@ function stepLi(s){
   return li;
 }
 
-async function runIncident(){
+function runIncident(){
   const btn=document.getElementById("runBtn"); btn.disabled=true;
   document.getElementById("idle").classList.add("hidden");
   const tl=document.getElementById("timeline"); tl.innerHTML=""; tl.classList.remove("hidden");
   document.getElementById("running").classList.remove("hidden");
+  document.getElementById("runningText").textContent="AutoSRE is investigating the live service…";
   document.getElementById("diagCard").classList.add("hidden");
   document.getElementById("evidenceCard").classList.add("hidden");
   document.getElementById("approveWrap").classList.add("hidden");
   document.getElementById("recoverCard").classList.add("hidden");
-  try{
-    const r = await fetch("/incident",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
-    const j = await r.json();
-    (j.steps||[]).filter(s=>s.type==="tool_call").forEach(s=> tl.appendChild(stepLi(s)));
-    const d = j.diagnosis||{};
-    renderDiagnosis(d);
-    if(d.pr_number){ currentPr=d.pr_number;
-      document.getElementById("approveWrap").classList.remove("hidden"); }
-  }catch(e){
-    document.getElementById("runningText").textContent = "Error: "+e;
-  }finally{
-    document.getElementById("running").classList.add("hidden");
-    btn.disabled=false;
-  }
+
+  // Live stream each step as the agent takes it (Server-Sent Events).
+  const es = new EventSource("/incident/stream");
+  es.onmessage = (e)=>{
+    let ev; try{ ev = JSON.parse(e.data); }catch(_){ return; }
+    if(ev.type==="tool_call"){
+      tl.appendChild(stepLi(ev));
+    }else if(ev.type==="final"){
+      const d = ev.diagnosis||{}; renderDiagnosis(d);
+      if(d.pr_number){ currentPr=d.pr_number;
+        document.getElementById("approveWrap").classList.remove("hidden"); }
+    }else if(ev.type==="error"){
+      document.getElementById("runningText").textContent = "Error: "+ev.error;
+    }else if(ev.type==="done"){
+      es.close();
+      document.getElementById("running").classList.add("hidden");
+      btn.disabled=false;
+    }
+  };
+  es.onerror = ()=>{ es.close();
+    document.getElementById("running").classList.add("hidden"); btn.disabled=false; };
 }
 
 function renderDiagnosis(d){
@@ -229,6 +238,22 @@ async function approve(){
     document.getElementById("recoverBody").innerHTML="<span class='muted'>Error: "+e+"</span>";
     btn.disabled=false; btn.textContent="Retry";
   }
+}
+
+async function resetDemo(){
+  const b=document.getElementById("resetBtn"); b.disabled=true; const t=b.textContent;
+  b.innerHTML="<span class='spinner'></span> Re-arming incident…";
+  try{ await fetch("/reset",{method:"POST"}); }catch(e){}
+  document.getElementById("timeline").innerHTML="";
+  document.getElementById("timeline").classList.add("hidden");
+  document.getElementById("idle").classList.remove("hidden");
+  document.getElementById("diagCard").classList.add("hidden");
+  document.getElementById("evidenceCard").classList.add("hidden");
+  document.getElementById("approveWrap").classList.add("hidden");
+  document.getElementById("recoverCard").classList.add("hidden");
+  const ab=document.getElementById("approveBtn"); ab.disabled=false; ab.textContent="✓ Approve & deploy fix";
+  await refreshTarget();
+  b.disabled=false; b.textContent=t;
 }
 
 refreshTarget();
