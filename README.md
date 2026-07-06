@@ -8,6 +8,11 @@ have an on-call SRE for that. **AutoSRE is an AI agent that runs the on-call
 investigate-and-repair loop autonomously, and stops for your approval before it
 changes anything.**
 
+It even starts where the pain does: AutoSRE reads the **real user reports** (complaints
+in the project's issue tracker), correlates them with the live system state, fixes the
+root cause, and drafts a reply to the affected users — closing the loop from user pain
+to remediation.
+
 **Live demo:** https://sida-agent-860561433627.asia-northeast1.run.app
 
 ---
@@ -16,7 +21,7 @@ changes anything.**
 
 | Step | What the agent does | Why a single LLM call can't |
 |------|---------------------|-----------------------------|
-| **Sense** | Probes the target's health, tails **real Cloud Logging**, reads the **deployed Cloud Run config** | Multi-step tool use where each result decides the next action (a ReAct loop) |
+| **Sense** | Reads **real user reports**, probes the target's health, tails **real Cloud Logging**, reads the **deployed Cloud Run config** | Multi-step tool use where each result decides the next action (a ReAct loop) |
 | **Diagnose** | Gemini reasons over the real evidence and pinpoints the root cause | Grounded in the actual stack trace + config, not a plausible guess |
 | **Propose** | Generates a concrete config fix | — |
 | **Gate** | **Pauses for human approval** — the trust boundary | Suspends multi-source state across an unbounded human decision |
