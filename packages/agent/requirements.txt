@@ -5,8 +5,21 @@ google-adk>=1.34.0,<2.0.0
 # Vertex AI client (Gemini, Agent Engine)
 google-cloud-aiplatform>=1.60.0
 
-# Firestore (state)
+# Firestore (state) — reserved for roadmap, unused in AutoSRE MVP
 google-cloud-firestore>=2.16.0
 
-# Pub/Sub (Monitoring -> Worker)
+# Pub/Sub (Monitoring -> Worker) — reserved for roadmap, unused in AutoSRE MVP
 google-cloud-pubsub>=2.23.0
+
+# --- AutoSRE MVP additions ---
+# Web server so the container runs as a Cloud Run HTTP service.
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+# Cloud Logging read — the grounded evidence source the agent tails.
+google-cloud-logging>=3.10,<4.0
+# Cloud Run Admin API — read target service status + deployed env config.
+google-cloud-run>=0.10,<1.0
+# HTTP client — probe the target service /health (recovery verification).
+httpx>=0.27,<1.0
+# (google-genai is pulled in transitively by google-adk; not pinned here to
+#  avoid resolver conflicts. `from google import genai` works via ADK.)

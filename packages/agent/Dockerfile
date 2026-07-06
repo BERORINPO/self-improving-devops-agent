@@ -28,6 +28,6 @@ ENV PORT=8080
 ENV PYTHONPATH=/app/src
 EXPOSE 8080
 
-# Default command: dry-run hello world (no LLM call).
-# In Cloud Run, override with FastAPI server entry point.
-CMD ["python", "-m", "agents.hello_world"]
+# Cloud Run entry point: FastAPI (AutoSRE agent-service) via uvicorn on $PORT.
+# server.py lives at src/agents/server.py; PYTHONPATH=/app/src -> module agents.server.
+CMD ["sh", "-c", "uvicorn agents.server:app --host 0.0.0.0 --port ${PORT}"]
