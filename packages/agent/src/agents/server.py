@@ -9,10 +9,13 @@ Env contract (set via `gcloud run deploy --set-env-vars`):
   GOOGLE_CLOUD_PROJECT=<project id>
   GOOGLE_CLOUD_LOCATION=<vertex location, e.g. global or us-central1>
 """
+import json
 import os
+import re
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 app = FastAPI(title="AutoSRE agent-service")
 
@@ -82,3 +85,63 @@ def smoke() -> JSONResponse:
         status_code=200 if overall_ok else 500,
         content={"overall_ok": overall_ok, "gemini": gemini, "logging": logging_result},
     )
+
+
+def _parse_diagnosis(text: str) -> dict:
+    """Tolerantly extract the agent's final JSON diagnosis (models sometimes wrap it in code fences)."""
+    if not text:
+        return {"error": "empty_final"}
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```(?:json)?", "", t).strip()
+        t = re.sub(r"```$", "", t).strip()
+    start, end = t.find("{"), t.rfind("}")
+    if start != -1 and end > start:
+        t = t[start : end + 1]
+    try:
+        return json.loads(t)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"parse_failed: {e}", "raw": text[:500]}
+
+
+class IncidentRequest(BaseModel):
+    service_name: str = "sida-target"
+    target_health_url: str | None = None
+
+
+@app.post("/incident")
+async def incident(req: IncidentRequest) -> dict:
+    """Run the AutoSRE agent on an incident: investigate -> diagnose -> open a real fix PR."""
+    from agents.agent import run_incident  # lazy import (heavy ADK deps, keep startup fast)
+
+    health_url = req.target_health_url or os.environ.get("TARGET_HEALTH_URL", "")
+    incident_text = (
+        f"Incident: the Cloud Run service '{req.service_name}' is reported unhealthy. "
+        f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
+    )
+    result = await run_incident(incident_text)
+    return {
+        "steps": result["steps"],
+        "diagnosis": _parse_diagnosis(result["final"]),
+        "raw_final": result["final"],
+    }
+
+
+class ApproveRequest(BaseModel):
+    pr_number: int
+    service_name: str = "sida-target"
+    env_var: str = "DATABASE_URL"
+    target_health_url: str | None = None
+
+
+@app.post("/approve")
+def approve(req: ApproveRequest) -> dict:
+    """Human-gated recovery: merge the fix PR, apply the env fix, verify the target is healthy."""
+    from agents.recovery import apply_env_fix, merge_pull_request, verify_recovery
+
+    value = os.environ.get(f"AUTOSRE_RESTORE_{req.env_var}", "")
+    merge = merge_pull_request(req.pr_number)
+    applied = apply_env_fix(req.service_name, req.env_var, value)
+    health_url = req.target_health_url or os.environ.get("TARGET_HEALTH_URL", "")
+    verify = verify_recovery(health_url)
+    return {"merge": merge, "apply": applied, "verify": verify}
