@@ -12,6 +12,7 @@ Env contract (set via `gcloud run deploy --set-env-vars`):
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -216,3 +217,27 @@ def user_reports() -> dict:
     from agents.github_tools import get_user_reviews
 
     return get_user_reviews()
+
+
+_last_auto_trigger = {"ts": 0.0}
+_AUTO_COOLDOWN_S = 300
+
+
+@app.post("/pubsub/incident")
+async def pubsub_incident() -> dict:
+    """Pub/Sub push receiver: a Cloud Monitoring alert (target unhealthy) auto-triggers
+    AutoSRE with NO human click — the agent investigates and opens a PR autonomously
+    (merge + deploy still require human approval). A cooldown prevents alert storms."""
+    now = time.time()
+    if now - _last_auto_trigger["ts"] < _AUTO_COOLDOWN_S:
+        return {"status": "skipped", "reason": "cooldown"}
+    _last_auto_trigger["ts"] = now
+    from agents.agent import run_incident
+
+    health_url = os.environ.get("TARGET_HEALTH_URL", "")
+    incident_text = (
+        "Incident auto-detected by Cloud Monitoring: the Cloud Run service 'sida-target' is unhealthy. "
+        f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
+    )
+    result = await run_incident(incident_text)
+    return {"status": "handled", "diagnosis": _parse_diagnosis(result["final"])}

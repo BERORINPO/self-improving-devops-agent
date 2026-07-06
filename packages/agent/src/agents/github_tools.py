@@ -18,6 +18,14 @@ import httpx
 
 API = "https://api.github.com"
 CONFIG_PATH = os.environ.get("TARGET_CONFIG_PATH", "deploy/target-service.env")
+# Safety guard: the agent may only open PRs that restore an env var on this allowlist.
+# This stops a hallucinated or prompt-injected "fix" (e.g. SECRET_KEY) from ever
+# becoming a real PR, no matter what the model outputs.
+ALLOWED_ENV_VARS = {
+    v.strip()
+    for v in os.environ.get("AUTOSRE_ALLOWED_ENV_VARS", "DATABASE_URL").split(",")
+    if v.strip()
+}
 
 
 def _repo() -> str:
@@ -77,6 +85,13 @@ def open_pull_request(missing_env_var: str, root_cause: str) -> dict:
     """
     try:
         repo = _repo()
+        if missing_env_var not in ALLOWED_ENV_VARS:
+            return {
+                "ok": False,
+                "error": f"'{missing_env_var}' is not in the allowed remediation set "
+                f"{sorted(ALLOWED_ENV_VARS)}; refusing to open a PR (safety guard against "
+                f"hallucinated or injected fixes)",
+            }
         # The canonical restore value is configured out-of-band (not guessed by
         # the model), so the fix is deterministic and matches what recovery applies.
         env_value = os.environ.get(f"AUTOSRE_RESTORE_{missing_env_var}", "<restore-value-unavailable>")
