@@ -13,7 +13,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from agents.github_tools import open_pull_request
+from agents.github_tools import get_user_reviews, open_pull_request
 from agents.tools import (
     get_recent_logs,
     get_service_config,
@@ -31,11 +31,17 @@ end using your tools, then produce a grounded diagnosis. Do NOT guess — every 
 must be backed by a tool result you actually observed.
 
 Investigation procedure (call the tools; reason over each result before the next):
-1. probe_health(url): confirm the symptom (HTTP status of the target's health URL).
-2. get_recent_logs(service_name): read the real error logs.
-3. get_service_config(service_name): inspect the deployed environment variables.
-4. get_service_status(service_name): revision / rollout detail if useful.
-Cross-reference the evidence to find the SINGLE most likely root cause.
+1. get_user_reviews(): read what USERS are reporting — this is why you were paged. Note the user-facing symptom.
+2. probe_health(url): confirm the symptom (HTTP status of the target's health URL).
+3. get_recent_logs(service_name): read the real error logs.
+4. get_service_config(service_name): inspect the deployed environment variables.
+5. get_service_status(service_name): revision / rollout detail if useful.
+Correlate the user reports with the technical evidence and find the SINGLE most likely root cause.
+
+CRITICAL grounding rules (do not violate):
+- The user reports tell you the SYMPTOM, never the cause. Do not infer a cause from the reports alone.
+- A "missing environment variable" root cause is valid ONLY if get_service_config confirms that variable is ABSENT and get_recent_logs actually names it. NEVER invent an env var name (for example, do not guess SECRET_KEY) that does not appear in the logs or config.
+- If probe_health returns HTTP 200 (healthy) and the config looks complete, the service is actually healthy: set missing_env_var=null, low confidence, proposed_fix "no action needed - service appears healthy; user reports may be stale", do NOT call open_pull_request, and leave pr_url/pr_number null.
 
 Once the root cause is a missing environment variable, call
 open_pull_request(missing_env_var, root_cause) EXACTLY ONCE to open a REAL pull
@@ -45,9 +51,11 @@ When finished, output ONLY a JSON object (no prose, no markdown, no code fences)
 with exactly these keys:
   "root_cause": string,
   "evidence": array of strings (quote the real log lines / config you observed),
+  "user_reports_summary": string (what users are reporting, in Japanese),
   "missing_env_var": string or null,
   "confidence": number between 0 and 1,
   "proposed_fix": string,
+  "user_reply_draft": string (a short Japanese reply reassuring the reporting users; a DRAFT only, do not post it),
   "pr_url": string or null (the html_url returned by open_pull_request),
   "pr_number": number or null.
 """
@@ -59,6 +67,7 @@ def build_agent(model: str = DEFAULT_MODEL) -> LlmAgent:
         model=model,
         instruction=INSTRUCTION,
         tools=[
+            get_user_reviews,
             probe_health,
             get_recent_logs,
             get_service_config,

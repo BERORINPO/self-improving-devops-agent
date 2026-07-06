@@ -33,6 +33,41 @@ def _headers() -> dict:
     }
 
 
+def get_user_reviews(limit: int = 10) -> dict:
+    """Read recent user-reported problems (open issues labeled 'user-report') from the project tracker.
+
+    These are REAL user complaints. Read them first to understand the user-facing symptom
+    before investigating the system.
+
+    Args:
+        limit: max number of user reports to return (default 10).
+    """
+    repo = _repo()
+    try:
+        with httpx.Client(base_url=API, headers=_headers(), timeout=20.0) as c:
+            r = c.get(
+                f"/repos/{repo}/issues",
+                params={"state": "open", "labels": "user-report", "per_page": limit},
+            )
+            r.raise_for_status()
+            reviews = [
+                {
+                    "number": i["number"],
+                    "title": i["title"],
+                    "body": (i.get("body") or "")[:300],
+                    "user": i["user"]["login"],
+                    "created_at": i["created_at"],
+                }
+                for i in r.json()
+                if "pull_request" not in i
+            ]
+            return {"ok": True, "count": len(reviews), "reviews": reviews}
+    except httpx.HTTPStatusError as e:
+        return {"ok": False, "error": f"GitHub {e.response.status_code}: {e.response.text[:200]}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 def open_pull_request(missing_env_var: str, root_cause: str) -> dict:
     """Open a real GitHub pull request that fixes the incident by restoring a missing environment variable in the target deploy config.
 

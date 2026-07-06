@@ -81,6 +81,11 @@
     <div class="pill" id="targetPill"><span class="dot" id="targetDot"></span><span id="targetText">対象を確認中…</span></div>
   </header>
 
+  <div class="card" id="userReportsCard" style="margin-bottom:16px">
+    <h2>👥 ユーザからの声 <span class="muted" id="urCount"></span></h2>
+    <div id="userReports" class="muted">読み込み中…</div>
+  </div>
+
   <div class="grid">
     <div class="card">
       <h2>インシデント タイムライン</h2>
@@ -133,11 +138,11 @@
 let currentPr = null;
 
 const ICONS = {
-  probe_health:"🌡", get_recent_logs:"📜", get_service_config:"⚙", get_service_status:"📊",
-  open_pull_request:"🔀"
+  get_user_reviews:"💬", probe_health:"🌡", get_recent_logs:"📜", get_service_config:"⚙",
+  get_service_status:"📊", open_pull_request:"🔀"
 };
 const LABELS = {
-  probe_health:"対象のヘルスを確認", get_recent_logs:"Cloud Logging を読取",
+  get_user_reviews:"ユーザ報告を確認", probe_health:"対象のヘルスを確認", get_recent_logs:"Cloud Logging を読取",
   get_service_config:"デプロイ設定を確認", get_service_status:"リビジョン状態を確認",
   open_pull_request:"修正 PR を起票"
 };
@@ -210,7 +215,8 @@ function renderDiagnosis(d){
     kv("欠落した環境変数", d.missing_env_var? "<code>"+d.missing_env_var+"</code>":"—") +
     kv("確信度", conf) +
     kv("提案する修正", d.proposed_fix||"—") +
-    (d.pr_url? "<a class='prlink' href='"+d.pr_url+"' target='_blank'>🔀 GitHub で PR #"+d.pr_number+" を見る →</a>":"");
+    (d.pr_url? "<a class='prlink' href='"+d.pr_url+"' target='_blank'>🔀 GitHub で PR #"+d.pr_number+" を見る →</a>":"") +
+    (d.user_reply_draft? "<div style='margin-top:14px'><div class='stagelabel'>ユーザへの返信ドラフト</div><div style='background:#0c1420;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:13px;color:var(--text)'>"+escapeHtml(d.user_reply_draft)+"</div></div>":"");
   if(Array.isArray(d.evidence) && d.evidence.length){
     document.getElementById("evidenceCard").classList.remove("hidden");
     document.getElementById("evidence").textContent = d.evidence.join("\n");
@@ -257,6 +263,25 @@ async function resetDemo(){
   b.disabled=false; b.textContent=t;
 }
 
+function escapeHtml(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+async function loadUserReports(){
+  try{
+    const r = await fetch("/user-reports"); const j = await r.json();
+    const box = document.getElementById("userReports");
+    if(!j.ok || !j.reviews || !j.reviews.length){
+      box.textContent = "現在、ユーザからの報告はありません。";
+      document.getElementById("urCount").textContent=""; return;
+    }
+    document.getElementById("urCount").textContent = "（"+j.count+" 件の報告）";
+    box.innerHTML = j.reviews.map(v=>
+      "<div style='padding:8px 0;border-bottom:1px solid var(--line)'>"+
+      "<div style='color:var(--text)'>💢 "+escapeHtml(v.title)+"</div>"+
+      "<div style='font-size:12.5px'>"+escapeHtml(v.body)+"</div></div>").join("");
+  }catch(e){ document.getElementById("userReports").textContent = "ユーザ報告の取得に失敗しました。"; }
+}
+
+loadUserReports();
 refreshTarget();
 setInterval(refreshTarget, 15000);
 </script>

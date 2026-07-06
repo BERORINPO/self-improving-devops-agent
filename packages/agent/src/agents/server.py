@@ -208,3 +208,11 @@ def reset() -> dict:
         "inject": inject_failure("sida-target", "DATABASE_URL"),
         "repo_reset": reset_repo_config(),
     }
+
+
+@app.get("/user-reports")
+def user_reports() -> dict:
+    """Return recent user-reported problems (for the console's 'user voice' panel)."""
+    from agents.github_tools import get_user_reviews
+
+    return get_user_reviews()
