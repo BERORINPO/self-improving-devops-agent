@@ -12,10 +12,13 @@ Env contract (set via `gcloud run deploy --set-env-vars`):
 import json
 import os
 import re
+from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+
+_UI_HTML = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
 
 app = FastAPI(title="AutoSRE agent-service")
 
@@ -30,8 +33,20 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/")
-def root() -> dict:
+@app.get("/", response_class=HTMLResponse)
+def ui() -> str:
+    return _UI_HTML
+
+
+@app.get("/target-health")
+def target_health() -> dict:
+    from agents.tools import probe_health
+
+    return probe_health(os.environ.get("TARGET_HEALTH_URL", ""))
+
+
+@app.get("/api/info")
+def info() -> dict:
     return {
         "service": "autosre-agent",
         "project": os.environ.get("GOOGLE_CLOUD_PROJECT"),
