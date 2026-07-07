@@ -340,10 +340,25 @@ def _verify_pubsub_oidc(request: Request) -> None:
         from google.auth.transport import requests as _gar  # lazy import (matches codebase style)
         from google.oauth2 import id_token as _idt
 
+        # clock_skew tolerates just-minted Pub/Sub tokens on a fresh instance
+        # ("Token used too early") so the first push delivery is not 403'd into
+        # a multi-minute retry backoff.
         claims = _idt.verify_oauth2_token(
-            auth.removeprefix("Bearer "), _gar.Request(), audience=audience
+            auth.removeprefix("Bearer "),
+            _gar.Request(),
+            audience=audience,
+            clock_skew_in_seconds=10,
         )
-    except Exception:  # noqa: BLE001 - any verification failure -> reject
+    except Exception as e:  # noqa: BLE001 - any verification failure -> reject
+        print(
+            json.dumps(
+                {
+                    "severity": "WARNING",
+                    "message": f"pubsub oidc verification failed: {str(e)[:200]}",
+                }
+            ),
+            flush=True,
+        )
         raise HTTPException(status_code=403, detail="invalid token")
     expected_sa = os.environ.get("AUTOSRE_PUBSUB_SA_EMAIL", "")
     if expected_sa and not (claims.get("email") == expected_sa and claims.get("email_verified")):
