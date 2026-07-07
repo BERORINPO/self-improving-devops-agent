@@ -169,11 +169,15 @@ def _check_console_key(request: Request) -> None:
     expected = os.environ.get("AUTOSRE_CONSOLE_KEY", "")
     if not expected:
         return  # unset -> open = current behavior
-    supplied = (
-        request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-        or request.query_params.get("key", "")
-    )
-    if not hmac.compare_digest(supplied, expected):
+    # Check BOTH credentials independently: a client may carry an unrelated
+    # Authorization header (e.g. Cloud Scheduler attaches a Google OIDC JWT)
+    # while supplying the console key via ?key= - the header must not shadow it.
+    supplied_header = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    supplied_query = request.query_params.get("key", "")
+    if not (
+        hmac.compare_digest(supplied_header, expected)
+        or hmac.compare_digest(supplied_query, expected)
+    ):
         raise HTTPException(status_code=401, detail="console key required")
 
 

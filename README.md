@@ -58,6 +58,23 @@ Google-signed token, audience + service-account checked). The full
 deploy wait for a human. (The "Run AutoSRE" button remains for on-demand runs, and
 publishing to the topic manually exercises the exact same event path.)
 
+### Measured in production
+
+Numbers from real production runs of this demo scenario (2026-07-07, Cloud Run
+request logs + GitHub timestamps) — measured, not projected:
+
+| What | Measured |
+|------|----------|
+| Full autonomous chain — uptime check 503 → alert → Pub/Sub → OIDC-verified push → agent run → real fix PR, **zero human action** | Fired end-to-end **twice**: [PR #20](https://github.com/BERORINPO/sida-target-config/pull/20), [PR #21](https://github.com/BERORINPO/sida-target-config/pull/21) |
+| Agent investigation run — reads real user reports + live Cloud Logging + deployed Cloud Run config, diagnoses, opens a real PR | **27–30 s** (Cloud Run request latencies: 27.3 s / 30.4 s) |
+| Pub/Sub event published → fix PR opened | **~90 s** end-to-end |
+| After the one human click (Approve) | PR merged, target redeployed, and the agent itself polls `/health` until 503 flips to 200 — recovery verified automatically (150 s poll budget) |
+
+For context: a human on-call engineer paged at 2am typically needs tens of
+minutes to read the logs, find the cause, patch, deploy, and verify. These
+figures are for this demo scenario — evidence that the loop closes fast, not a
+universal MTTR claim.
+
 ---
 
 ## Architecture
