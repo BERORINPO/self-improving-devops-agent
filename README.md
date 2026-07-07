@@ -49,12 +49,14 @@ See a live example: https://github.com/BERORINPO/sida-target-config/pull/7
 
 ### Autonomous trigger — no human needed to start
 
-AutoSRE runs itself. A **Cloud Monitoring** alert on the target's health publishes to a
-**Pub/Sub** topic (`autosre-incidents`); its push subscription invokes the agent's
-`POST /pubsub/incident` endpoint, and the full **investigate → diagnose → open-PR** loop
-runs with **no human click**. Only merge + deploy wait for a human. (The "Run AutoSRE"
-button remains for on-demand runs.) In the demo, publishing to the topic stands in for the
-Monitoring alert — the exact same event path.
+AutoSRE runs itself — and the whole detection chain is **live, not simulated**. A
+**Cloud Monitoring uptime check** watches the target's `/health`; when it fails, the
+alert policy publishes to a **Pub/Sub** topic (`autosre-incidents`), whose push
+subscription invokes the agent's `POST /pubsub/incident` endpoint (**OIDC-verified**:
+Google-signed token, audience + service-account checked). The full
+**investigate → diagnose → open-PR** loop runs with **no human click**. Only merge +
+deploy wait for a human. (The "Run AutoSRE" button remains for on-demand runs, and
+publishing to the topic manually exercises the exact same event path.)
 
 ---
 
@@ -138,7 +140,7 @@ but the architecture is built for them:
 
 - **Self-Improving autonomy policy** — learn per-scenario autonomy thresholds from past-incident approve-vs-override rates, with shadow mode, a minimum-sample guard, and never auto-escalating destructive actions. The `confidence` the agent already emits is the seed signal.
 - **Multi-Agent Debate** — considered and **deliberately skipped**: 2025 research shows a single grounded agent outperforms debate on well-scoped RCA while adding cost, latency, and JSON-fragility.
-- **Full Cloud Monitoring wiring** — the Pub/Sub auto-trigger is live; wiring the Monitoring alert-policy that publishes to it is a one-step production/Terraform addition.
+- ~~**Full Cloud Monitoring wiring**~~ — **shipped**: a Monitoring uptime check + alert policy + Pub/Sub notification channel are live; the real detection chain (uptime 503 → alert → Pub/Sub → OIDC-verified push → autonomous run → PR) has fired end-to-end in production. Terraform-izing it remains roadmap.
 - **Incident history** — Firestore-backed audit trail and dedupe.
 - **One-click deploy** — Terraform for the whole stack.
 - **More scenarios** — 5xx spikes, memory leaks, dependency CVEs (the tool interface already exposes revisions and status via `get_service_status`).
