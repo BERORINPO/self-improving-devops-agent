@@ -37,7 +37,7 @@ The line AutoSRE draws: **read / diagnose / propose = autonomous. Merge + deploy
 always human-approved.**
 
 Every run produces a **real, permanent artifact**: the pull request the agent opened.
-See a live example: https://github.com/BERORINPO/sida-target-config/pull/2
+See a live example: https://github.com/BERORINPO/sida-target-config/pull/7
 
 ### Autonomous trigger — no human needed to start
 
