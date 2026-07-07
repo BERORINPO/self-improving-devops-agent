@@ -9,13 +9,15 @@ Env contract (set via `gcloud run deploy --set-env-vars`):
   GOOGLE_CLOUD_PROJECT=<project id>
   GOOGLE_CLOUD_LOCATION=<vertex location, e.g. global or us-central1>
 """
+import base64
+import hmac
 import json
 import os
 import re
 import time
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -120,6 +122,17 @@ def _parse_diagnosis(text: str) -> dict:
         return {"error": f"parse_failed: {e}", "raw": text[:500]}
 
 
+def _classify_outcome(d: dict) -> str:
+    """Classify the agent's diagnosis into a single outcome label (frozen cross-worker contract)."""
+    if d.get("pr_url"):
+        return "pr_opened"
+    if d.get("action") == "escalate" or d.get("escalation"):
+        return "escalated"
+    if d.get("missing_env_var") is None:
+        return "healthy"
+    return "none"
+
+
 class IncidentRequest(BaseModel):
     service_name: str = "sida-target"
     target_health_url: str | None = None
@@ -136,11 +149,26 @@ async def incident(req: IncidentRequest) -> dict:
         f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
     )
     result = await run_incident(incident_text)
+    diagnosis = _parse_diagnosis(result["final"])
     return {
         "steps": result["steps"],
-        "diagnosis": _parse_diagnosis(result["final"]),
+        "outcome": _classify_outcome(diagnosis),
+        "diagnosis": diagnosis,
         "raw_final": result["final"],
     }
+
+
+def _check_console_key(request: Request) -> None:
+    """Gate on AUTOSRE_CONSOLE_KEY (default-off). Accept Bearer header OR ?key= query param."""
+    expected = os.environ.get("AUTOSRE_CONSOLE_KEY", "")
+    if not expected:
+        return  # unset -> open = current behavior
+    supplied = (
+        request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+        or request.query_params.get("key", "")
+    )
+    if not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="console key required")
 
 
 class ApproveRequest(BaseModel):
@@ -151,10 +179,17 @@ class ApproveRequest(BaseModel):
 
 
 @app.post("/approve")
-def approve(req: ApproveRequest) -> dict:
+def approve(req: ApproveRequest, request: Request) -> dict:
     """Human-gated recovery: merge the fix PR, apply the env fix, verify the target is healthy."""
+    _check_console_key(request)
+    from agents.github_tools import ALLOWED_ENV_VARS
     from agents.recovery import apply_env_fix, merge_pull_request, verify_recovery
 
+    if req.env_var not in ALLOWED_ENV_VARS:
+        return {
+            "ok": False,
+            "error": f"'{req.env_var}' is not in the allowed remediation set; escalated vars require manual operation",
+        }
     value = os.environ.get(f"AUTOSRE_RESTORE_{req.env_var}", "")
     merge = merge_pull_request(req.pr_number)
     applied = apply_env_fix(req.service_name, req.env_var, value)
@@ -179,9 +214,11 @@ async def incident_stream() -> StreamingResponse:
         try:
             async for ev in run_incident_events(incident_text):
                 if ev.get("type") == "final":
+                    diagnosis = _parse_diagnosis(ev["final"])
                     ev = {
                         "type": "final",
-                        "diagnosis": _parse_diagnosis(ev["final"]),
+                        "outcome": _classify_outcome(diagnosis),
+                        "diagnosis": diagnosis,
                         "raw_final": ev["final"],
                     }
                 yield f"data: {json.dumps(ev)}\n\n"
@@ -201,8 +238,9 @@ async def incident_stream() -> StreamingResponse:
 
 
 @app.post("/reset")
-def reset() -> dict:
+def reset(request: Request) -> dict:
     """Re-arm the demo: break the target again and reset the config repo (for repeated judging)."""
+    _check_console_key(request)
     from agents.recovery import inject_failure, reset_repo_config
 
     return {
@@ -223,11 +261,57 @@ _last_auto_trigger = {"ts": 0.0}
 _AUTO_COOLDOWN_S = 300
 
 
+def _verify_pubsub_oidc(request: Request) -> None:
+    """Verify the Google OIDC bearer token on Pub/Sub push (default-off via AUTOSRE_PUBSUB_AUDIENCE).
+
+    When AUTOSRE_PUBSUB_AUDIENCE is unset, returns silently -> exact current behavior (deploys never
+    break). When set, requires a valid Google-signed OIDC token whose aud matches. Optionally pins the
+    signing service account via AUTOSRE_PUBSUB_SA_EMAIL. Raises HTTPException(403) on any failure."""
+    audience = os.environ.get("AUTOSRE_PUBSUB_AUDIENCE", "")
+    if not audience:
+        return  # unset -> skip = exact current behavior
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=403, detail="missing bearer token")
+    try:
+        from google.auth.transport import requests as _gar  # lazy import (matches codebase style)
+        from google.oauth2 import id_token as _idt
+
+        claims = _idt.verify_oauth2_token(
+            auth.removeprefix("Bearer "), _gar.Request(), audience=audience
+        )
+    except Exception:  # noqa: BLE001 - any verification failure -> reject
+        raise HTTPException(status_code=403, detail="invalid token")
+    expected_sa = os.environ.get("AUTOSRE_PUBSUB_SA_EMAIL", "")
+    if expected_sa and not (claims.get("email") == expected_sa and claims.get("email_verified")):
+        raise HTTPException(status_code=403, detail="wrong service account")
+
+
 @app.post("/pubsub/incident")
-async def pubsub_incident() -> dict:
+async def pubsub_incident(request: Request) -> dict:
     """Pub/Sub push receiver: a Cloud Monitoring alert (target unhealthy) auto-triggers
     AutoSRE with NO human click — the agent investigates and opens a PR autonomously
-    (merge + deploy still require human approval). A cooldown prevents alert storms."""
+    (merge + deploy still require human approval). A cooldown prevents alert storms.
+
+    Order: OIDC verify -> tolerant envelope parse -> cooldown -> run. Verifying auth BEFORE
+    stamping the cooldown prevents an unauthenticated attacker from suppressing real alerts."""
+    _verify_pubsub_oidc(request)
+
+    detail = ""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 - empty body (curl smoke) must still succeed
+        body = {}
+    msg = body.get("message") if isinstance(body, dict) else None
+    if isinstance(msg, dict):  # real Pub/Sub push envelope
+        data = msg.get("data") or ""
+        try:
+            detail = base64.b64decode(data).decode("utf-8", "replace")[:1000]
+        except Exception:  # noqa: BLE001 - malformed data payload -> ignore
+            detail = ""
+    elif isinstance(body, dict) and body:  # legacy raw-JSON body (curl tests)
+        detail = json.dumps(body)[:1000]
+
     now = time.time()
     if now - _last_auto_trigger["ts"] < _AUTO_COOLDOWN_S:
         return {"status": "skipped", "reason": "cooldown"}
@@ -239,5 +323,12 @@ async def pubsub_incident() -> dict:
         "Incident auto-detected by Cloud Monitoring: the Cloud Run service 'sida-target' is unhealthy. "
         f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
     )
+    if detail:
+        incident_text += f" Monitoring alert payload (verbatim): {detail}"
     result = await run_incident(incident_text)
-    return {"status": "handled", "diagnosis": _parse_diagnosis(result["final"])}
+    diagnosis = _parse_diagnosis(result["final"])
+    return {
+        "status": "handled",
+        "outcome": _classify_outcome(diagnosis),
+        "diagnosis": diagnosis,
+    }

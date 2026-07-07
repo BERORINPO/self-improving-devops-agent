@@ -14,8 +14,17 @@
 #>
 param(
   [ValidateSet("inject", "restore")]
-  [string]$Action = "inject"
+  [string]$Action = "inject",
+  [string]$EnvVar = "DATABASE_URL"
 )
+
+# Demo restore values keyed by env var name. DATABASE_URL keeps the original
+# demo value so the default path is unchanged; SECRET_KEY supports the
+# escalation (out-of-policy) scenario.
+$restoreValues = @{
+  DATABASE_URL = "postgres://demo:demo@db.internal:5432/app"
+  SECRET_KEY   = "demo-secret-0000-rotate-me"
+}
 
 $common = @(
   "run", "services", "update", "sida-target",
@@ -25,11 +34,11 @@ $common = @(
 )
 
 if ($Action -eq "inject") {
-  gcloud @common --remove-env-vars DATABASE_URL
-  Write-Output "[inject] DATABASE_URL removed from sida-target. /health -> 503 (incident live)."
+  gcloud @common --remove-env-vars $EnvVar
+  Write-Output "[inject] $EnvVar removed from sida-target. /health -> 503 (incident live)."
 }
 else {
   # Quote the whole flag so PowerShell does not array-split on any comma.
-  gcloud @common "--update-env-vars=DATABASE_URL=postgres://demo:demo@db.internal:5432/app"
-  Write-Output "[restore] DATABASE_URL re-added to sida-target. /health -> 200 (recovered)."
+  gcloud @common "--update-env-vars=$EnvVar=$($restoreValues[$EnvVar])"
+  Write-Output "[restore] $EnvVar re-added to sida-target. /health -> 200 (recovered)."
 }

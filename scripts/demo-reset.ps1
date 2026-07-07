@@ -17,9 +17,16 @@ $repo = "BERORINPO/sida-target-config"
 $path = "deploy/target-service.env"
 
 Write-Output "[1/2] breaking target (remove DATABASE_URL)..."
+# Remove DATABASE_URL to arm the incident. Also (re-)set SECRET_KEY in the SAME
+# update so that if the target is armed with REQUIRED_ENV_VARS=DATABASE_URL,SECRET_KEY,
+# only DATABASE_URL ends up missing and the main demo's reason stays "DATABASE_URL".
+# This is additive and idempotent: in the default single-var demo, SECRET_KEY is
+# simply present-but-unused, so /health still reports DATABASE_URL as the only gap.
 gcloud run services update sida-target `
   --project bero-devops-agent --region asia-northeast1 `
-  --remove-env-vars DATABASE_URL --quiet 2>&1 | Select-Object -Last 1
+  --remove-env-vars DATABASE_URL `
+  "--update-env-vars=SECRET_KEY=demo-secret-0000-rotate-me" `
+  --quiet 2>&1 | Select-Object -Last 1
 
 Write-Output "[2/2] resetting config repo to broken state..."
 $sha = gh api "repos/$repo/contents/$path" --jq ".sha"
