@@ -56,6 +56,7 @@
   .badge{font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line)}
   .badge.bad{color:var(--bad);border-color:rgba(255,92,108,.4)}
   .badge.good{color:var(--good);border-color:rgba(34,211,166,.4)}
+  .badge.warn{color:var(--warn);border-color:rgba(245,181,68,.4)}
   a{color:var(--accent)}
   .prlink{display:inline-flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;border-radius:10px;
           background:#0c1a16;border:1px solid rgba(34,211,166,.35);color:var(--accent2);text-decoration:none;font-weight:600}
@@ -64,6 +65,10 @@
   @keyframes spin{to{transform:rotate(360deg)}}
   .hint{font-size:12.5px;color:var(--muted);margin-top:10px}
   .stagelabel{font-size:11px;letter-spacing:.06em;color:var(--muted);margin:16px 0 8px}
+  .finale{border-color:rgba(34,211,166,.45)}
+  .flash{animation:finaleGlow 1.6s ease-out 2}
+  @keyframes finaleGlow{0%{box-shadow:0 0 0 0 rgba(34,211,166,.45)}
+    70%{box-shadow:0 0 0 14px rgba(34,211,166,0)}100%{box-shadow:none}}
   .hidden{display:none}
   footer{margin-top:26px;color:var(--muted);font-size:12px;text-align:center}
 </style>
@@ -118,6 +123,11 @@
         <h2>診断</h2>
         <div id="diagBody"></div>
       </div>
+
+      <div class="card hidden" id="escalationCard" style="margin-top:16px;border-color:rgba(245,181,68,.45)">
+        <h2>⚠ 人間へのエスカレーション</h2>
+        <div id="escalationBody"></div>
+      </div>
     </div>
   </div>
 
@@ -131,11 +141,21 @@
     <div id="recoverBody"></div>
   </div>
 
+  <div class="card hidden finale" id="finaleCard" style="margin-top:16px">
+    <h2>✉ ユーザへの報告 — 復旧完了</h2>
+    <div id="finaleBody"></div>
+  </div>
+
   <footer>AutoSRE · DevOps × AI Agent Hackathon · Google Cloud Run + Vertex Gemini + ADK</footer>
 </div>
 
 <script>
 let currentPr = null;
+let currentReplyDraft = null;
+
+// URL の ?key= を一度だけ読む。未指定なら認証ヘッダを付けない（今日と完全に同一の挙動）。
+const CONSOLE_KEY = new URLSearchParams(location.search).get("key") || "";
+function authHeaders(){ return CONSOLE_KEY ? {"Authorization":"Bearer "+CONSOLE_KEY} : {}; }
 
 const ICONS = {
   get_user_reviews:"💬", probe_health:"🌡", get_recent_logs:"📜", get_service_config:"⚙",
@@ -193,7 +213,10 @@ function runIncident(){
       tl.appendChild(stepLi(ev));
     }else if(ev.type==="final"){
       const d = ev.diagnosis||{}; renderDiagnosis(d);
-      if(d.pr_number){ currentPr=d.pr_number;
+      currentReplyDraft = d.user_reply_draft || null;
+      if(ev.outcome==="escalated" || d.action==="escalate" || d.escalation){
+        renderEscalation(d);
+      }else if(d.pr_number){ currentPr=d.pr_number;
         document.getElementById("approveWrap").classList.remove("hidden"); }
     }else if(ev.type==="error"){
       document.getElementById("runningText").textContent = "エラー: "+ev.error;
@@ -224,20 +247,57 @@ function renderDiagnosis(d){
 }
 function kv(k,v){ return "<div class='kv'><span class='k'>"+k+"</span><span>"+v+"</span></div>"; }
 
+function renderEscalation(d){
+  // 承認ゲートとは排他。PR は起票されていないので #approveWrap は隠したままにする。
+  document.getElementById("approveWrap").classList.add("hidden");
+  const esc = d.escalation || {};
+  const conf = typeof d.confidence==="number" ? Math.round(d.confidence*100)+"%" : "—";
+  const runbook = Array.isArray(esc.runbook) ? esc.runbook : [];
+  const steps = runbook.length
+    ? "<ol style='margin:0;padding-left:20px'>"+runbook.map(s=>"<li>"+escapeHtml(String(s))+"</li>").join("")+"</ol>"
+    : "対応手順は提示されていません。";
+  let html =
+    kv("エスカレーション理由", esc.reason? escapeHtml(String(esc.reason)) : "—") +
+    kv("修正がブロックされた変数", d.missing_env_var? "<code>"+escapeHtml(String(d.missing_env_var))+"</code>":"—") +
+    kv("確信度", conf) +
+    "<div class='stagelabel'>推奨対応手順（ランブック）</div>" +
+    "<div class='evidence'>"+steps+"</div>";
+  if(esc.verification){ html += "<div class='hint'>検証: "+escapeHtml(String(esc.verification))+"</div>"; }
+  if(esc.risk){ html += "<div class='hint'>自動適用しなかった理由: "+escapeHtml(String(esc.risk))+"</div>"; }
+  html += "<div class='hint'>自動修正の権限外と判断 — PR は起票せず、対応手順を提案して停止しました。</div>";
+  document.getElementById("escalationBody").innerHTML = html;
+  document.getElementById("escalationCard").classList.remove("hidden");
+}
+
 async function approve(){
   const btn=document.getElementById("approveBtn"); btn.disabled=true;
   btn.innerHTML="<span class='spinner'></span> マージ・再デプロイ中…";
   const card=document.getElementById("recoverCard"); card.classList.remove("hidden");
   document.getElementById("recoverBody").innerHTML="<span class='muted'>PR をマージし、修正を適用し、復旧を確認中…</span>";
   try{
-    const r=await fetch("/approve",{method:"POST",headers:{"Content-Type":"application/json"},
+    const r=await fetch("/approve",{method:"POST",
+      headers:{"Content-Type":"application/json", ...authHeaders()},
       body:JSON.stringify({pr_number:currentPr})});
+    if(r.status===401 || r.status===403){
+      document.getElementById("recoverBody").innerHTML=
+        "<span class='muted'>認証キーが無効です（URL の ?key= を確認してください）。</span>";
+      btn.disabled=false; btn.textContent="再試行"; return;
+    }
     const j=await r.json();
     const rec = j.verify && j.verify.recovered;
     document.getElementById("recoverBody").innerHTML =
       kv("PR マージ", j.merge && j.merge.merged? "<span class='badge good'>完了</span>":"<span class='badge bad'>失敗</span>") +
       kv("修正の適用", j.apply && j.apply.ok? "<span class='badge good'>完了</span>":"<span class='badge bad'>失敗</span>") +
       kv("対象の復旧", rec? "<span class='badge good'>200 OK</span>":"<span class='badge bad'>未復旧</span>");
+    if(rec && currentReplyDraft){
+      const fc=document.getElementById("finaleCard");
+      document.getElementById("finaleBody").innerHTML =
+        "<div style='background:#0c1a16;border:1px solid rgba(34,211,166,.35);border-radius:10px;padding:12px;font-size:13.5px'>"
+        + escapeHtml(currentReplyDraft) + "</div>";
+      fc.classList.remove("hidden");
+      fc.scrollIntoView({behavior:"smooth", block:"center"});
+      fc.classList.remove("flash"); void fc.offsetWidth; fc.classList.add("flash");
+    }
     await refreshTarget();
     btn.innerHTML = rec? "✓ 復旧完了" : "再試行";
     btn.disabled = rec? true : false;
@@ -250,7 +310,7 @@ async function approve(){
 async function resetDemo(){
   const b=document.getElementById("resetBtn"); b.disabled=true; const t=b.textContent;
   b.innerHTML="<span class='spinner'></span> 障害を再発生中…";
-  try{ await fetch("/reset",{method:"POST"}); }catch(e){}
+  try{ await fetch("/reset",{method:"POST",headers:authHeaders()}); }catch(e){}
   document.getElementById("timeline").innerHTML="";
   document.getElementById("timeline").classList.add("hidden");
   document.getElementById("idle").classList.remove("hidden");
@@ -258,6 +318,10 @@ async function resetDemo(){
   document.getElementById("evidenceCard").classList.add("hidden");
   document.getElementById("approveWrap").classList.add("hidden");
   document.getElementById("recoverCard").classList.add("hidden");
+  document.getElementById("escalationCard").classList.add("hidden");
+  const fc=document.getElementById("finaleCard"); fc.classList.add("hidden"); fc.classList.remove("flash");
+  document.getElementById("finaleBody").innerHTML="";
+  currentReplyDraft=null;
   const ab=document.getElementById("approveBtn"); ab.disabled=false; ab.textContent="✓ 承認して修正を反映";
   await refreshTarget();
   b.disabled=false; b.textContent=t;
