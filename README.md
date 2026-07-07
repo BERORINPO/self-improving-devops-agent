@@ -13,11 +13,19 @@ in the project's issue tracker), correlates them with the live system state, fix
 root cause, and drafts a reply to the affected users — closing the loop from user pain
 to remediation.
 
-**How it differs:** every other AI SRE agent triggers from a monitoring *alert* and ends
+**How it differs:** most AI SRE agents trigger from a monitoring *alert* and end
 at a *dashboard*. AutoSRE triggers from the **user's voice** and ends by **writing the user
-back** — user-pain-in, user-answer-out. Investigate / diagnose / propose are autonomous;
+back** — user-pain-in, user-answer-out. (Drafting a fix PR itself is table stakes —
+incident.io, Rootly, and Azure SRE Agent do it too; the differentiation is the entry and
+exit points of the loop.) Investigate / diagnose / propose are autonomous;
 merge + deploy stay behind a human approval gate — the 2026 industry consensus for
 irreversible actions (incident.io, Rootly, Azure SRE Agent).
+
+> **On the repo name:** `self-improving-devops-agent` is the north-star (see
+> [Roadmap](#roadmap-designed-for-deliberately-out-of-hackathon-scope) — a learned
+> per-scenario autonomy policy). The hackathon submission is **AutoSRE**, the working
+> foundation that self-improvement would sit on. Named for where it's going; judged on
+> what it does today.
 
 **Live demo:** https://sida-agent-860561433627.asia-northeast1.run.app
 
