@@ -2,13 +2,19 @@
 
 Day 1 smoke gate: prove that Vertex Gemini + Cloud Logging both work from the
 Cloud Run runtime service account. Day 2 adds /incident (the ReAct investigate ->
-diagnose -> propose -> open-PR loop) and /events (SSE stream).
+diagnose -> propose -> open-PR loop) and /incident/stream (per-connection SSE).
+
+/events is a persistent, read-only SSE broadcast channel: any open console
+subscribes on page load, and a Pub/Sub-triggered agent run on POST /pubsub/incident
+is fanned out to every subscriber so a real Cloud Monitoring alert makes every open
+console timeline come alive with no human click.
 
 Env contract (set via `gcloud run deploy --set-env-vars`):
   GOOGLE_GENAI_USE_VERTEXAI=TRUE
   GOOGLE_CLOUD_PROJECT=<project id>
   GOOGLE_CLOUD_LOCATION=<vertex location, e.g. global or us-central1>
 """
+import asyncio
 import base64
 import hmac
 import json
@@ -260,6 +266,63 @@ def user_reports() -> dict:
 _last_auto_trigger = {"ts": 0.0}
 _AUTO_COOLDOWN_S = 300
 
+# In-process broadcast fabric for the persistent /events SSE channel.
+# NOTE: this reaches only consoles connected to the SAME Cloud Run instance. The
+# demo runs a single instance (min-instances=0 + a ~5-min warm-ping), which is
+# sufficient; a multi-instance deploy would need a shared bus (Pub/Sub/Redis).
+_console_subscribers: list[asyncio.Queue] = []
+_SUBSCRIBER_QUEUE_MAXSIZE = 100
+
+
+def _broadcast(ev: dict) -> None:
+    """Fan an event out to every /events subscriber. Never raises into the caller.
+
+    Drops the event for any full/broken queue rather than blocking a slow console
+    (bounded queue + drop-on-full), so one dead client cannot stall a broadcast."""
+    for q in list(_console_subscribers):
+        try:
+            q.put_nowait(ev)
+        except Exception:  # noqa: BLE001 - QueueFull or a torn-down queue: skip it
+            pass
+
+
+@app.get("/events")
+async def events() -> StreamingResponse:
+    """Persistent, read-only SSE channel: broadcasts agent-run events (from any source,
+    e.g. a Pub/Sub-triggered autonomous run) to every open console on this instance.
+
+    Read-only observation -> intentionally unauthenticated (EventSource cannot send
+    headers). Each connection gets a bounded queue; a heartbeat comment keeps the
+    connection alive, and the queue is always removed on disconnect (no leak)."""
+    queue: asyncio.Queue = asyncio.Queue(maxsize=_SUBSCRIBER_QUEUE_MAXSIZE)
+    _console_subscribers.append(queue)
+
+    async def gen():
+        try:
+            yield "retry: 60000\n\n"
+            while True:
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # heartbeat: keep the connection warm, avoid busy-loop
+                    continue
+                yield f"data: {json.dumps(ev)}\n\n"
+        finally:
+            try:
+                _console_subscribers.remove(queue)
+            except ValueError:  # already removed
+                pass
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
 
 def _verify_pubsub_oidc(request: Request) -> None:
     """Verify the Google OIDC bearer token on Pub/Sub push (default-off via AUTOSRE_PUBSUB_AUDIENCE).
@@ -316,7 +379,7 @@ async def pubsub_incident(request: Request) -> dict:
     if now - _last_auto_trigger["ts"] < _AUTO_COOLDOWN_S:
         return {"status": "skipped", "reason": "cooldown"}
     _last_auto_trigger["ts"] = now
-    from agents.agent import run_incident
+    from agents.agent import run_incident_events  # lazy import (matches /incident/stream)
 
     health_url = os.environ.get("TARGET_HEALTH_URL", "")
     incident_text = (
@@ -325,8 +388,33 @@ async def pubsub_incident(request: Request) -> dict:
     )
     if detail:
         incident_text += f" Monitoring alert payload (verbatim): {detail}"
-    result = await run_incident(incident_text)
-    diagnosis = _parse_diagnosis(result["final"])
+
+    # Stream the autonomous run to every open console (in-process broadcast), then
+    # still return the same ack dict shape so the Pub/Sub push ack is unaffected.
+    diagnosis: dict = {}
+    _broadcast({"type": "run_started", "source": "pubsub"})
+    try:
+        async for ev in run_incident_events(incident_text):
+            if ev.get("type") == "final":
+                diagnosis = _parse_diagnosis(ev["final"])
+                _broadcast(
+                    {
+                        "type": "final",
+                        "outcome": _classify_outcome(diagnosis),
+                        "diagnosis": diagnosis,
+                        "raw_final": ev["final"],
+                    }
+                )
+            else:
+                _broadcast(ev)  # tool_call / tool_result pass through unchanged
+    except Exception as e:  # noqa: BLE001 - never 500 a Pub/Sub push; always give
+        # subscribers a terminal event (else the console spinner hangs forever) and
+        # return a JSON ack so Pub/Sub does not retry-storm a run that will re-fail.
+        _broadcast({"type": "error", "error": str(e)})
+        _broadcast({"type": "done"})
+        return {"status": "error", "error": str(e)[:300]}
+    _broadcast({"type": "done"})
+
     return {
         "status": "handled",
         "outcome": _classify_outcome(diagnosis),
