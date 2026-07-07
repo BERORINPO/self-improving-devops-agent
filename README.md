@@ -2,6 +2,8 @@
 
 > **DevOps × AI Agent Hackathon 2026** submission (hosted by Findy, sponsored by Google Cloud).
 
+![AutoSRE in action: a real Pub/Sub event starts the run with zero clicks, the agent investigates on real logs and opens a real PR, one human approval, and 503 flips to 200 with a drafted reply to the affected users](docs/media/hero.gif)
+
 When a deploy breaks at 2am, someone has to read the logs, find the cause, write the
 fix, ship it — and verify it actually recovered. Solo founders and small teams don't
 have an on-call SRE for that. **AutoSRE is an AI agent that runs the on-call
