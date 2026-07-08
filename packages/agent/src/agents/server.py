@@ -150,14 +150,40 @@ def _record_case(diagnosis: dict, source: str, service: str, started_ts: float) 
     record_diagnosis(diagnosis, source=source, service=service, duration_s=time.time() - started_ts)
 
 
+def _video_clause(video_ref: str | None) -> str:
+    """Append a screen-recording hint to the incident prompt when one is available.
+
+    Precedence: an explicit per-request video_ref, else AUTOSRE_REPORT_VIDEO_URI
+    (the demo default). Empty on both -> "" -> the agent never calls the video
+    tool = current behavior. Keeps the video feature staged/default-off."""
+    from agents.video_tools import enabled as _video_enabled
+
+    if not _video_enabled():
+        return ""  # feature off -> never mention a video (also avoids a wasted tool call)
+    ref = (video_ref or os.environ.get("AUTOSRE_REPORT_VIDEO_URI", "")).strip()
+    # Only splice a STRICT gs:// URI into the instruction. Rejecting whitespace/prose
+    # means a caller-controlled video_ref cannot carry a prompt-injection payload. (CISO M-1)
+    if not ref or not re.fullmatch(r"gs://[\w.\-/]+", ref):
+        return ""
+    return (
+        f" A user attached a screen recording at {ref}. "
+        "Call analyze_report_video on it to extract the reproduction steps and timeline "
+        "before you diagnose."
+    )
+
+
 class IncidentRequest(BaseModel):
     service_name: str = "sida-target"
     target_health_url: str | None = None
+    video_ref: str | None = None
 
 
 @app.post("/incident")
-async def incident(req: IncidentRequest) -> dict:
+async def incident(req: IncidentRequest, request: Request) -> dict:
     """Run the AutoSRE agent on an incident: investigate -> diagnose -> open a real fix PR."""
+    # Gate on the console key (no-op when AUTOSRE_CONSOLE_KEY is unset). This endpoint
+    # accepts a caller-controlled video_ref, so it must not be an open trigger. (CISO M-2)
+    _check_console_key(request)
     from agents.agent import run_incident  # lazy import (heavy ADK deps, keep startup fast)
 
     health_url = req.target_health_url or os.environ.get("TARGET_HEALTH_URL", "")
@@ -165,6 +191,7 @@ async def incident(req: IncidentRequest) -> dict:
         f"Incident: the Cloud Run service '{req.service_name}' is reported unhealthy. "
         f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
     )
+    incident_text += _video_clause(req.video_ref)
     started = time.time()
     result = await run_incident(incident_text)
     diagnosis = _parse_diagnosis(result["final"])
@@ -239,6 +266,7 @@ async def incident_stream() -> StreamingResponse:
         "Incident: the Cloud Run service 'sida-target' is reported unhealthy. "
         f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
     )
+    incident_text += _video_clause(None)
 
     async def gen():
         yield "retry: 60000\n\n"
@@ -432,6 +460,7 @@ async def pubsub_incident(request: Request) -> dict:
     )
     if detail:
         incident_text += f" Monitoring alert payload (verbatim): {detail}"
+    incident_text += _video_clause(None)
 
     # Stream the autonomous run to every open console (in-process broadcast), then
     # still return the same ack dict shape so the Pub/Sub push ack is unaffected.
