@@ -12,6 +12,7 @@ resource "google_project_service" "required" {
     "cloudbuild.googleapis.com",       # gcloud run deploy --source builds
     "artifactregistry.googleapis.com", # cloud-run-source-deploy repository
     "logging.googleapis.com",          # agent reads logs during diagnosis
+    "bigquery.googleapis.com",         # case memory (self-improving loop)
   ])
 
   project            = var.project_id

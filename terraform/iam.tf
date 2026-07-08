@@ -6,6 +6,8 @@
 #   roles/run.viewer                  - inspect Cloud Run service state
 #   roles/run.developer               - patch sida-target env (the remediation)
 #   roles/secretmanager.secretAccessor - read github-pat at revision startup
+#   roles/bigquery.jobUser            - run recall queries against case memory
+#     (table data access is granted at dataset level in bigquery.tf)
 resource "google_project_iam_member" "runtime_sa_roles" {
   for_each = toset([
     "roles/aiplatform.user",
@@ -13,6 +15,7 @@ resource "google_project_iam_member" "runtime_sa_roles" {
     "roles/run.viewer",
     "roles/run.developer",
     "roles/secretmanager.secretAccessor",
+    "roles/bigquery.jobUser",
   ])
 
   project = var.project_id
