@@ -113,6 +113,26 @@ Cloud Logging   Cloud Run    GitHub (config repo)
 - **Backend**: Python 3.12 + FastAPI. **Frontend**: a single self-contained console
   page served by the agent-service (same-origin, no separate deploy).
 
+## Why Gemini (and not just any LLM)
+
+The architecture deliberately keeps the probabilistic core swappable — merge/deploy
+runs on a deterministic, LLM-free pipeline — yet Vertex AI Gemini 2.5 Flash is a
+considered choice, not a default:
+
+- **Latency is the product.** On-call value decays by the second. The measured
+  27–30 s investigation is a direct consequence of Flash's low latency.
+- **Production logs never leave the project boundary.** Logs and configs carry
+  secrets and PII. Diagnosis runs inside the same GCP project as the workloads:
+  no egress to an external LLM API, no API-key lifecycle to manage (auth is ADC
+  from the Cloud Run service account), and every model call is captured by Cloud
+  Audit Logs. For an SRE tool that reads raw production evidence, that
+  auditability bar is hard to meet with any external API.
+- **Zero-idle economics.** Pay-per-call Gemini + scale-to-zero Cloud Run keeps a
+  24/7 on-call agent at ~$0/month at rest.
+- **ADK-native.** The agent is an ADK `LlmAgent` running a multi-step ReAct tool
+  loop on Vertex — auth, retries and tool dispatch come from the platform, not
+  hand-rolled glue.
+
 ## Repository layout
 
 ```
