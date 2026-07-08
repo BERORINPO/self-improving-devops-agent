@@ -193,9 +193,10 @@ function stepLi(s){
   ico.textContent = ICONS[s.name]||"•";
   const body = document.createElement("div");
   const label = LABELS[s.name]||s.name;
-  body.innerHTML = "<b>"+label+"</b>" +
+  // label は LABELS[] の定数 or ツール名。args の値は LLM/ツール由来なので必ずエスケープ。
+  body.innerHTML = "<b>"+escapeHtml(String(label))+"</b>" +
     (s.args && Object.keys(s.args).length ? "<div class='args'>"+
-      Object.entries(s.args).map(([k,v])=>k+"="+String(v)).join("  ·  ")+"</div>":"");
+      Object.entries(s.args).map(([k,v])=>escapeHtml(String(k))+"="+escapeHtml(String(v))).join("  ·  ")+"</div>":"");
   li.appendChild(ico); li.appendChild(body);
   return li;
 }
@@ -302,7 +303,7 @@ function renderMemory(m){
       "<div class='muted' style='font-size:11px'>"+escapeHtml(when)+" · "+escapeHtml(String(c.source||""))+" · "+badge+"</div>"+
       "<div style='margin-top:4px'>"+escapeHtml(String(c.root_cause||"—"))+"</div>"+
       (c.missing_env_var? "<div class='muted' style='margin-top:2px'>欠落変数: <code>"+escapeHtml(String(c.missing_env_var))+"</code></div>":"")+
-      (prUrl? "<a class='prlink' href='"+prUrl+"' target='_blank' style='font-size:12px'>PR #"+escapeHtml(String(c.pr_number??""))+" →</a>":"")+
+      (prUrl? "<a class='prlink' href='"+prUrl+"' target='_blank' rel='noopener noreferrer' style='font-size:12px'>PR #"+escapeHtml(String(c.pr_number??""))+" →</a>":"")+
       "</div>";
   }).join("") +
   "<div class='hint'>記憶は仮説 — エージェントはこの後、実ログ・実設定で検証してから結論します。</div>";
@@ -311,12 +312,14 @@ function renderMemory(m){
 function renderDiagnosis(d){
   const card=document.getElementById("diagCard"); card.classList.remove("hidden");
   const conf = typeof d.confidence==="number" ? Math.round(d.confidence*100)+"%" : "—";
+  // root_cause / proposed_fix / missing_env_var / pr_url は LLM 出力(信頼できない) → 文脈別にエスケープ。
+  const diagPrUrl = attrSafeUrl(d.pr_url);
   document.getElementById("diagBody").innerHTML =
-    kv("根本原因", d.root_cause||"—") +
-    kv("欠落した環境変数", d.missing_env_var? "<code>"+d.missing_env_var+"</code>":"—") +
+    kv("根本原因", escapeHtml(String(d.root_cause||"—"))) +
+    kv("欠落した環境変数", d.missing_env_var? "<code>"+escapeHtml(String(d.missing_env_var))+"</code>":"—") +
     kv("確信度", conf) +
-    kv("提案する修正", d.proposed_fix||"—") +
-    (d.pr_url? "<a class='prlink' href='"+d.pr_url+"' target='_blank'>🔀 GitHub で PR #"+d.pr_number+" を見る →</a>":"") +
+    kv("提案する修正", escapeHtml(String(d.proposed_fix||"—"))) +
+    (diagPrUrl? "<a class='prlink' href='"+diagPrUrl+"' target='_blank' rel='noopener noreferrer'>🔀 GitHub で PR #"+escapeHtml(String(d.pr_number??""))+" を見る →</a>":"") +
     (d.user_reply_draft? "<div style='margin-top:14px'><div class='stagelabel'>ユーザへの返信ドラフト</div><div style='background:#0c1420;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:13px;color:var(--text)'>"+escapeHtml(d.user_reply_draft)+"</div></div>":"");
   if(Array.isArray(d.evidence) && d.evidence.length){
     document.getElementById("evidenceCard").classList.remove("hidden");
