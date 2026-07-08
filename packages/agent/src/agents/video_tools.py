@@ -103,27 +103,41 @@ def analyze_report_video(video_ref: str) -> dict:
         }
     if not video_ref or not video_ref.strip():
         return {"ok": True, "enabled": True, "note": "no video attached to this report"}
+    # Confused-deputy guard: video_ref is caller-controlled and drives a fetch by
+    # the runtime service account. Require a gs:// URI, and (if AUTOSRE_VIDEO_BUCKET
+    # is set) restrict it to that bucket, so it can never be turned into an
+    # arbitrary-GCS-read oracle. (CISO H-1)
+    ref = video_ref.strip()
+    if not ref.lower().startswith("gs://"):
+        return {"ok": False, "enabled": True, "error": "video_ref must be a gs:// URI"}
+    allowed = os.environ.get("AUTOSRE_VIDEO_BUCKET", "").strip()
+    if allowed and not ref.startswith(allowed):
+        return {"ok": False, "enabled": True, "error": "video_ref is outside the allowed bucket"}
     try:
+        import concurrent.futures
+
         from google import genai  # lazy import (matches server._gemini_smoke)
         from google.genai import types
 
         project = os.environ["GOOGLE_CLOUD_PROJECT"]
         location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
-        try:
-            client = genai.Client(
-                vertexai=True,
-                project=project,
-                location=location,
-                http_options=types.HttpOptions(timeout=_CALL_TIMEOUT_MS),
-            )
-        except Exception:  # noqa: BLE001 - older SDKs may not accept http_options
-            client = genai.Client(vertexai=True, project=project, location=location)
+        client = genai.Client(vertexai=True, project=project, location=location)
+        video_part = types.Part.from_uri(file_uri=ref, mime_type=_mime_for(ref))
 
-        video_part = types.Part.from_uri(file_uri=video_ref, mime_type=_mime_for(video_ref))
-        resp = client.models.generate_content(
-            model=MODEL,
-            contents=[video_part, types.Part.from_text(text=_PROMPT)],
-        )
+        # Wall-clock guard: guarantee the "never hang an incident run" contract
+        # regardless of whether the installed SDK honors an http-level timeout.
+        # On timeout the future raises here (caught below) and the orphaned call
+        # is left to finish on its own; shutdown(wait=False) never blocks.
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = ex.submit(
+                client.models.generate_content,
+                model=MODEL,
+                contents=[video_part, types.Part.from_text(text=_PROMPT)],
+            )
+            resp = fut.result(timeout=_CALL_TIMEOUT_MS / 1000)
+        finally:
+            ex.shutdown(wait=False)
         data = _parse_json(resp.text or "")
         steps = data.get("reproduction_steps") or []
         timeline = data.get("timeline") or []

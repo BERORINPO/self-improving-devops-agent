@@ -151,6 +151,31 @@ def test_caps_oversized_lists(vt):
     return ok, f"steps={len(out['reproduction_steps'])} timeline={len(out['timeline'])}"
 
 
+def test_rejects_non_gs_uri(vt):
+    # CISO H-1: only gs:// URIs may reach the SA-authenticated fetch.
+    _FakeModels.raise_exc = False
+    _FakeModels.reply = '{"surfaced_symptom":"x","reproduction_steps":[],"timeline":[]}'
+    bad = vt.analyze_report_video("https://evil.example/secret")
+    ok = bad["ok"] is False and bad["enabled"] is True and "gs://" in bad.get("error", "")
+    return ok, f"bad={bad}"
+
+
+def test_bucket_allowlist(vt):
+    # CISO H-1: when AUTOSRE_VIDEO_BUCKET is set, refs outside it are rejected.
+    _FakeModels.reply = '{"surfaced_symptom":"x","reproduction_steps":[],"timeline":[]}'
+    os.environ["AUTOSRE_VIDEO_BUCKET"] = "gs://autosre-reports/"
+    try:
+        outside = vt.analyze_report_video("gs://other-bucket/x.mp4")
+        inside = vt.analyze_report_video("gs://autosre-reports/x.mp4")
+    finally:
+        os.environ.pop("AUTOSRE_VIDEO_BUCKET", None)
+    ok = (
+        outside["ok"] is False and "allowed bucket" in outside.get("error", "")
+        and inside["ok"] is True
+    )
+    return ok, f"outside={outside.get('error')} inside_ok={inside['ok']}"
+
+
 def main() -> int:
     _install_fake_genai()
     # analyze_report_video reads GOOGLE_CLOUD_PROJECT when enabled; the fake
@@ -167,6 +192,8 @@ def main() -> int:
         test_bad_json_never_raises,
         test_api_outage_never_raises,
         test_caps_oversized_lists,
+        test_rejects_non_gs_uri,
+        test_bucket_allowlist,
     ]
     passed = 0
     for t in tests:

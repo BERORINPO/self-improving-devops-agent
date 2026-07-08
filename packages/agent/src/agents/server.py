@@ -156,8 +156,14 @@ def _video_clause(video_ref: str | None) -> str:
     Precedence: an explicit per-request video_ref, else AUTOSRE_REPORT_VIDEO_URI
     (the demo default). Empty on both -> "" -> the agent never calls the video
     tool = current behavior. Keeps the video feature staged/default-off."""
+    from agents.video_tools import enabled as _video_enabled
+
+    if not _video_enabled():
+        return ""  # feature off -> never mention a video (also avoids a wasted tool call)
     ref = (video_ref or os.environ.get("AUTOSRE_REPORT_VIDEO_URI", "")).strip()
-    if not ref:
+    # Only splice a STRICT gs:// URI into the instruction. Rejecting whitespace/prose
+    # means a caller-controlled video_ref cannot carry a prompt-injection payload. (CISO M-1)
+    if not ref or not re.fullmatch(r"gs://[\w.\-/]+", ref):
         return ""
     return (
         f" A user attached a screen recording at {ref}. "
@@ -173,8 +179,11 @@ class IncidentRequest(BaseModel):
 
 
 @app.post("/incident")
-async def incident(req: IncidentRequest) -> dict:
+async def incident(req: IncidentRequest, request: Request) -> dict:
     """Run the AutoSRE agent on an incident: investigate -> diagnose -> open a real fix PR."""
+    # Gate on the console key (no-op when AUTOSRE_CONSOLE_KEY is unset). This endpoint
+    # accepts a caller-controlled video_ref, so it must not be an open trigger. (CISO M-2)
+    _check_console_key(request)
     from agents.agent import run_incident  # lazy import (heavy ADK deps, keep startup fast)
 
     health_url = req.target_health_url or os.environ.get("TARGET_HEALTH_URL", "")
