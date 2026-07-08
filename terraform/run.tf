@@ -91,6 +91,13 @@ resource "google_cloud_run_v2_service" "agent" {
         name  = "AUTOSRE_PUBSUB_SA_EMAIL"
         value = local.runtime_sa
       }
+      env {
+        # Case memory (self-improving loop). Empty disables the feature
+        # (recording no-ops, recall reports enabled=false) — default-off
+        # staged enablement, same contract as the other AUTOSRE_* flags.
+        name  = "AUTOSRE_CASES_TABLE"
+        value = "${var.project_id}.${google_bigquery_dataset.autosre_memory.dataset_id}.${google_bigquery_table.cases.table_id}"
+      }
     }
   }
 

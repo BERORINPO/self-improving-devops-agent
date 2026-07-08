@@ -139,6 +139,17 @@ def _classify_outcome(d: dict) -> str:
     return "none"
 
 
+def _record_case(diagnosis: dict, source: str, service: str, started_ts: float) -> None:
+    """Persist the diagnosed case to memory (case_store handles default-off + never raises).
+
+    The synchronous BigQuery insert (~0.3s) runs after the final diagnosis is
+    already produced, so it does not affect the measured investigation timings.
+    """
+    from agents.case_store import record_diagnosis  # lazy import (matches codebase style)
+
+    record_diagnosis(diagnosis, source=source, service=service, duration_s=time.time() - started_ts)
+
+
 class IncidentRequest(BaseModel):
     service_name: str = "sida-target"
     target_health_url: str | None = None
@@ -154,8 +165,10 @@ async def incident(req: IncidentRequest) -> dict:
         f"Incident: the Cloud Run service '{req.service_name}' is reported unhealthy. "
         f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
     )
+    started = time.time()
     result = await run_incident(incident_text)
     diagnosis = _parse_diagnosis(result["final"])
+    _record_case(diagnosis, "manual", req.service_name, started)
     return {
         "steps": result["steps"],
         "outcome": _classify_outcome(diagnosis),
@@ -201,10 +214,16 @@ def approve(req: ApproveRequest, request: Request) -> dict:
             "error": f"'{req.env_var}' is not in the allowed remediation set; escalated vars require manual operation",
         }
     value = os.environ.get(f"AUTOSRE_RESTORE_{req.env_var}", "")
+    started = time.time()
     merge = merge_pull_request(req.pr_number)
     applied = apply_env_fix(req.service_name, req.env_var, value)
     health_url = req.target_health_url or os.environ.get("TARGET_HEALTH_URL", "")
     verify = verify_recovery(health_url)
+    # Close the learning loop: remember whether the human-approved fix actually
+    # recovered the service (joined to the diagnosis case by pr_number).
+    from agents.case_store import record_resolution
+
+    record_resolution(req.pr_number, bool(verify.get("recovered")), time.time() - started)
     return {"merge": merge, "apply": applied, "verify": verify}
 
 
@@ -221,10 +240,12 @@ async def incident_stream() -> StreamingResponse:
 
     async def gen():
         yield "retry: 60000\n\n"
+        started = time.time()
         try:
             async for ev in run_incident_events(incident_text):
                 if ev.get("type") == "final":
                     diagnosis = _parse_diagnosis(ev["final"])
+                    _record_case(diagnosis, "console", "sida-target", started)
                     ev = {
                         "type": "final",
                         "outcome": _classify_outcome(diagnosis),
@@ -411,11 +432,13 @@ async def pubsub_incident(request: Request) -> dict:
     # Stream the autonomous run to every open console (in-process broadcast), then
     # still return the same ack dict shape so the Pub/Sub push ack is unaffected.
     diagnosis: dict = {}
+    started = time.time()
     _broadcast({"type": "run_started", "source": "pubsub"})
     try:
         async for ev in run_incident_events(incident_text):
             if ev.get("type") == "final":
                 diagnosis = _parse_diagnosis(ev["final"])
+                _record_case(diagnosis, "pubsub", "sida-target", started)
                 _broadcast(
                     {
                         "type": "final",

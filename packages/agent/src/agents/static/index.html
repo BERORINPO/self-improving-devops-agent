@@ -119,6 +119,11 @@
           style="margin-top:10px;background:#26324a;color:var(--muted);border:1px solid var(--line)">↺ デモをリセット（障害を再発生）</button>
       </div>
 
+      <div class="card hidden" id="memoryCard" style="margin-top:16px;border-color:rgba(124,140,255,.45)">
+        <h2>🧠 過去の類似インシデント — AutoSRE の記憶</h2>
+        <div id="memoryBody"></div>
+      </div>
+
       <div class="card hidden" id="diagCard" style="margin-top:16px">
         <h2>診断</h2>
         <div id="diagBody"></div>
@@ -158,11 +163,12 @@ const CONSOLE_KEY = new URLSearchParams(location.search).get("key") || "";
 function authHeaders(){ return CONSOLE_KEY ? {"Authorization":"Bearer "+CONSOLE_KEY} : {}; }
 
 const ICONS = {
-  get_user_reviews:"💬", probe_health:"🌡", get_recent_logs:"📜", get_service_config:"⚙",
-  get_service_status:"📊", open_pull_request:"🔀"
+  get_user_reviews:"💬", recall_similar_cases:"🧠", probe_health:"🌡", get_recent_logs:"📜",
+  get_service_config:"⚙", get_service_status:"📊", open_pull_request:"🔀"
 };
 const LABELS = {
-  get_user_reviews:"ユーザ報告を確認", probe_health:"対象のヘルスを確認", get_recent_logs:"Cloud Logging を読取",
+  get_user_reviews:"ユーザ報告を確認", recall_similar_cases:"過去の類似事例を想起 (BigQuery)",
+  probe_health:"対象のヘルスを確認", get_recent_logs:"Cloud Logging を読取",
   get_service_config:"デプロイ設定を確認", get_service_status:"リビジョン状態を確認",
   open_pull_request:"修正 PR を起票"
 };
@@ -203,6 +209,8 @@ function handleAgentEvent(ev){
   const tl = document.getElementById("timeline");
   if(ev.type==="tool_call"){
     tl.appendChild(stepLi(ev));
+  }else if(ev.type==="tool_result" && ev.name==="recall_similar_cases" && ev.result){
+    renderMemory(ev.result);
   }else if(ev.type==="final"){
     const d = ev.diagnosis||{}; renderDiagnosis(d);
     currentReplyDraft = d.user_reply_draft || null;
@@ -231,6 +239,7 @@ function resetTimelineForRun(runningText){
   document.getElementById("evidenceCard").classList.add("hidden");
   document.getElementById("approveWrap").classList.add("hidden");
   document.getElementById("recoverCard").classList.add("hidden");
+  document.getElementById("memoryCard").classList.add("hidden");
 }
 
 function runIncident(){
@@ -259,6 +268,34 @@ function resetForAutonomousRun(){
   // 自動検知ランは前回結果の残骸も一掃する（手動 runIncident には無い追加処理）。
   document.getElementById("escalationCard").classList.add("hidden");
   const fc=document.getElementById("finaleCard"); fc.classList.add("hidden"); fc.classList.remove("flash");
+}
+
+// 記憶ツール(recall_similar_cases)の結果を「過去の類似インシデント」カードに描画する。
+// 記憶が無効(enabled=false)の間はカードを一切出さない = 従来コンソールと同一表示。
+function renderMemory(m){
+  if(!m.enabled) return;
+  const card=document.getElementById("memoryCard");
+  const body=document.getElementById("memoryBody");
+  card.classList.remove("hidden");
+  if(!m.count){
+    body.innerHTML = "<div class='muted'>過去の事例なし — 初見のインシデントとして調査します。次回からこの対応が記憶されます。</div>";
+    return;
+  }
+  body.innerHTML = (m.cases||[]).map(c=>{
+    const badge = c.outcome==="verified_recovered"
+      ? "<span style='color:#39d98a'>✓ 復旧実証済</span>"
+      : c.outcome==="recovery_failed"
+        ? "<span style='color:#f5b544'>△ 復旧失敗</span>"
+        : "<span class='muted'>… 未解決/保留</span>";
+    const when = c.when ? new Date(c.when).toLocaleString("ja-JP") : "—";
+    return "<div style='border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;font-size:13px'>"+
+      "<div class='muted' style='font-size:11px'>"+escapeHtml(when)+" · "+escapeHtml(String(c.source||""))+" · "+badge+"</div>"+
+      "<div style='margin-top:4px'>"+escapeHtml(String(c.root_cause||"—"))+"</div>"+
+      (c.missing_env_var? "<div class='muted' style='margin-top:2px'>欠落変数: <code>"+escapeHtml(String(c.missing_env_var))+"</code></div>":"")+
+      (c.pr_url? "<a class='prlink' href='"+escapeHtml(String(c.pr_url))+"' target='_blank' style='font-size:12px'>PR #"+escapeHtml(String(c.pr_number??""))+" →</a>":"")+
+      "</div>";
+  }).join("") +
+  "<div class='hint'>記憶は仮説 — エージェントはこの後、実ログ・実設定で検証してから結論します。</div>";
 }
 
 function renderDiagnosis(d){

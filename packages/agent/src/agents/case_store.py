@@ -1,0 +1,191 @@
+"""AutoSRE case memory — the self-improving loop (BigQuery-backed).
+
+Every diagnosed incident is recorded as a structured "case" in BigQuery, and the
+agent consults this memory at the start of the next investigation via the
+recall_similar_cases tool. Past cases are surfaced to the model as HYPOTHESES to
+verify against live evidence — never as proof — so the grounding discipline of
+the ReAct loop is preserved while repeat incidents get diagnosed faster.
+
+Why BigQuery (not an app-local store): AutoSRE already emits structured logs to
+Cloud Logging; keeping case memory in BigQuery keeps the "move the model to the
+data" property — the memory lives where operational data already lives, is
+queryable with SQL, and needs zero extra serving infrastructure.
+
+Default-off contract (matches the codebase's staged-enablement pattern):
+  AUTOSRE_CASES_TABLE  "<project>.<dataset>.<table>" — unset means the feature
+                       is disabled: recording becomes a no-op and the recall
+                       tool reports enabled=false. Deploys never break.
+"""
+import datetime
+import json
+import os
+import uuid
+
+_RECALL_LIMIT = 5
+_RECALL_WINDOW_DAYS = 90
+# Streaming inserts + queries must never stall an incident run.
+_BQ_TIMEOUT_S = 15.0
+
+
+def _cases_table() -> str:
+    return os.environ.get("AUTOSRE_CASES_TABLE", "")
+
+
+def enabled() -> bool:
+    return bool(_cases_table())
+
+
+def _log(level: str, event: str, **fields) -> None:
+    print(json.dumps({"severity": level, "event": event, **fields}), flush=True)
+
+
+def _insert_row(row: dict) -> None:
+    """Streaming-insert one case row. Raises on failure (callers decide policy)."""
+    from google.cloud import bigquery  # lazy import (matches codebase style)
+
+    client = bigquery.Client(project=os.environ.get("GOOGLE_CLOUD_PROJECT") or None)
+    errors = client.insert_rows_json(_cases_table(), [row], timeout=_BQ_TIMEOUT_S)
+    if errors:
+        raise RuntimeError(f"bigquery insert_rows_json: {errors}")
+
+
+def record_diagnosis(diagnosis: dict, source: str, service: str, duration_s: float) -> None:
+    """Persist one diagnosed incident as a case row. Fire-and-forget: never raises.
+
+    Called after _parse_diagnosis on every run path (manual, stream, pubsub).
+    A parse-failed diagnosis (no root_cause) is not worth remembering — skip it.
+    """
+    if not enabled():
+        return
+    if not diagnosis or not diagnosis.get("root_cause"):
+        return
+    try:
+        confidence = diagnosis.get("confidence")
+        row = {
+            "kind": "diagnosis",
+            "case_id": uuid.uuid4().hex,
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "service": service,
+            "source": source,
+            "root_cause": str(diagnosis.get("root_cause") or "")[:1000],
+            "missing_env_var": diagnosis.get("missing_env_var"),
+            "action": diagnosis.get("action"),
+            "confidence": float(confidence) if isinstance(confidence, (int, float)) else None,
+            "pr_url": diagnosis.get("pr_url"),
+            "pr_number": diagnosis.get("pr_number"),
+            "user_reports_summary": str(diagnosis.get("user_reports_summary") or "")[:1000],
+            "duration_s": round(duration_s, 1),
+        }
+        _insert_row(row)
+        _log("INFO", "case_recorded", kind="diagnosis", service=service, source=source,
+             action=row["action"], pr_number=row["pr_number"])
+    except Exception as e:  # noqa: BLE001 - memory must never break an incident run
+        _log("WARNING", "case_record_failed", kind="diagnosis", error=f"{type(e).__name__}: {e}")
+
+
+def record_resolution(pr_number: int, recovered: bool, duration_s: float) -> None:
+    """Persist the human-approved recovery outcome for a case (joined by pr_number).
+
+    Fire-and-forget: never raises. Called from /approve after verify_recovery.
+    """
+    if not enabled():
+        return
+    try:
+        row = {
+            "kind": "resolution",
+            "case_id": uuid.uuid4().hex,
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "pr_number": pr_number,
+            "recovered": bool(recovered),
+            "duration_s": round(duration_s, 1),
+        }
+        _insert_row(row)
+        _log("INFO", "case_recorded", kind="resolution", pr_number=pr_number, recovered=recovered)
+    except Exception as e:  # noqa: BLE001
+        _log("WARNING", "case_record_failed", kind="resolution", error=f"{type(e).__name__}: {e}")
+
+
+def recall_similar_cases(service_name: str) -> dict:
+    """Recall AutoSRE's own past incident cases for a service, newest first.
+
+    Returns previous diagnoses (root cause, missing env var, action, confidence,
+    PR) joined with their human-approved recovery outcome where one exists.
+    Treat past cases ONLY as hypotheses to verify against live evidence (logs and
+    config) — never as proof.
+
+    Args:
+        service_name: the Cloud Run service name, e.g. "sida-target".
+    """
+    if not enabled():
+        return {
+            "ok": True,
+            "enabled": False,
+            "cases": [],
+            "note": "case memory is not configured (AUTOSRE_CASES_TABLE unset); proceed normally",
+        }
+    try:
+        from google.cloud import bigquery  # lazy import
+
+        client = bigquery.Client(project=os.environ.get("GOOGLE_CLOUD_PROJECT") or None)
+        # Table id is validated server-side by BigQuery; parameters cover user input.
+        query = f"""
+            SELECT
+              d.ts, d.source, d.root_cause, d.missing_env_var, d.action,
+              d.confidence, d.pr_url, d.pr_number, d.user_reports_summary,
+              d.duration_s,
+              r.recovered AS resolution_recovered,
+              r.duration_s AS resolution_duration_s
+            FROM `{_cases_table()}` AS d
+            LEFT JOIN `{_cases_table()}` AS r
+              ON r.kind = 'resolution' AND r.pr_number = d.pr_number
+            WHERE d.kind = 'diagnosis'
+              AND d.service = @service
+              AND d.ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+            ORDER BY d.ts DESC
+            LIMIT @limit
+        """
+        job = client.query(
+            query,
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("service", "STRING", service_name),
+                    bigquery.ScalarQueryParameter("days", "INT64", _RECALL_WINDOW_DAYS),
+                    bigquery.ScalarQueryParameter("limit", "INT64", _RECALL_LIMIT),
+                ]
+            ),
+        )
+        cases = []
+        for r in job.result(timeout=_BQ_TIMEOUT_S):
+            resolved = r["resolution_recovered"]
+            cases.append(
+                {
+                    "when": r["ts"].isoformat() if r["ts"] else None,
+                    "source": r["source"],
+                    "root_cause": r["root_cause"],
+                    "missing_env_var": r["missing_env_var"],
+                    "action": r["action"],
+                    "confidence": r["confidence"],
+                    "pr_url": r["pr_url"],
+                    "pr_number": r["pr_number"],
+                    "user_reports_summary": r["user_reports_summary"],
+                    "diagnosis_duration_s": r["duration_s"],
+                    # "verified_recovered" is the strongest signal: a human approved
+                    # the fix and the 503->200 verification succeeded afterwards.
+                    "outcome": (
+                        "verified_recovered"
+                        if resolved
+                        else ("recovery_failed" if resolved is False else "unresolved_or_pending")
+                    ),
+                }
+            )
+        _log("INFO", "case_recalled", service=service_name, count=len(cases))
+        return {
+            "ok": True,
+            "enabled": True,
+            "count": len(cases),
+            "cases": cases,
+            "reminder": "past cases are hypotheses; verify against live logs/config before concluding",
+        }
+    except Exception as e:  # noqa: BLE001 - a memory outage must not block diagnosis
+        _log("WARNING", "case_recall_failed", error=f"{type(e).__name__}: {e}")
+        return {"ok": False, "enabled": True, "cases": [], "error": f"{type(e).__name__}: {e}"}
