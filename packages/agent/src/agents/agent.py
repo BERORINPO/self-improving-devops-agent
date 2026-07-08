@@ -21,6 +21,7 @@ from agents.tools import (
     get_service_status,
     probe_health,
 )
+from agents.video_tools import analyze_report_video
 
 APP_NAME = "autosre"
 DEFAULT_MODEL = os.environ.get("AUTOSRE_MODEL", "gemini-2.5-flash")
@@ -39,18 +40,25 @@ must be backed by a tool result you actually observed.
 
 Investigation procedure (call the tools; reason over each result before the next):
 1. get_user_reviews(): read what USERS are reporting — this is why you were paged. Note the user-facing symptom.
-2. recall_similar_cases(service_name): consult your OWN past-incident memory (previous
+2. analyze_report_video(video_ref): if the incident mentions an attached screen recording
+   (a gs:// URI), watch it to extract the reproduction steps and a timestamped timeline of
+   the symptom. If no video is mentioned or analysis is disabled, skip this and proceed.
+3. recall_similar_cases(service_name): consult your OWN past-incident memory (previous
    diagnoses and their verified recovery outcomes). If a similar past case exists, adopt
    its root cause as a working HYPOTHESIS and say so — then verify that hypothesis with
    the live evidence below. If memory is disabled/empty, just proceed.
-3. probe_health(url): confirm the symptom (HTTP status of the target's health URL).
-4. get_recent_logs(service_name): read the real error logs.
-5. get_service_config(service_name): inspect the deployed environment variables.
-6. get_service_status(service_name): revision / rollout detail if useful.
+4. probe_health(url): confirm the symptom (HTTP status of the target's health URL).
+5. get_recent_logs(service_name): read the real error logs.
+6. get_service_config(service_name): inspect the deployed environment variables.
+7. get_service_status(service_name): revision / rollout detail if useful.
 Correlate the user reports with the technical evidence and find the SINGLE most likely root cause.
 
 CRITICAL grounding rules (do not violate):
 - The user reports tell you the SYMPTOM, never the cause. Do not infer a cause from the reports alone.
+- The report VIDEO shows the SYMPTOM and reproduction steps (e.g. "0:17 → 503 on screen"),
+  never the cause. A timestamp is corroborating evidence of WHEN/HOW users hit the failure —
+  you must still confirm the cause in get_recent_logs and get_service_config. NEVER open a PR
+  based on the video alone.
 - Past cases from recall_similar_cases are HYPOTHESES, never proof. A remembered root
   cause still requires the same live evidence (logs naming the variable, config showing
   it absent) before you may conclude it. Never open a PR based on memory alone.
@@ -100,6 +108,7 @@ def build_agent(model: str = DEFAULT_MODEL) -> LlmAgent:
         instruction=INSTRUCTION,
         tools=[
             get_user_reviews,
+            analyze_report_video,
             recall_similar_cases,
             probe_health,
             get_recent_logs,
@@ -134,8 +143,11 @@ async def run_incident(incident_text: str, model: str = DEFAULT_MODEL) -> dict:
             steps.append({"type": "tool_call", "name": call.name, "args": dict(call.args or {})})
         for resp in event.get_function_responses() or []:
             step = {"type": "tool_result", "name": resp.name}
-            # Surface the memory payload so callers can show WHAT the agent recalled.
-            if resp.name == "recall_similar_cases" and isinstance(resp.response, dict):
+            # Surface the memory/video payloads so callers can show WHAT the agent
+            # recalled and what it saw in the report video.
+            if resp.name in ("recall_similar_cases", "analyze_report_video") and isinstance(
+                resp.response, dict
+            ):
                 step["result"] = resp.response
             steps.append(step)
         if event.is_final_response() and event.content and event.content.parts:
@@ -168,8 +180,11 @@ async def run_incident_events(incident_text: str, model: str = DEFAULT_MODEL):
             }
         for resp in event.get_function_responses() or []:
             ev = {"type": "tool_result", "name": resp.name}
-            # The console renders a "past similar incidents" card from this payload.
-            if resp.name == "recall_similar_cases" and isinstance(resp.response, dict):
+            # The console renders the "past similar incidents" and "report video"
+            # cards from these payloads.
+            if resp.name in ("recall_similar_cases", "analyze_report_video") and isinstance(
+                resp.response, dict
+            ):
                 ev["result"] = resp.response
             yield ev
         if event.is_final_response() and event.content and event.content.parts:

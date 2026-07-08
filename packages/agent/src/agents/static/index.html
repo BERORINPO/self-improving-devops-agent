@@ -119,6 +119,11 @@
           style="margin-top:10px;background:#26324a;color:var(--muted);border:1px solid var(--line)">↺ デモをリセット（障害を再発生）</button>
       </div>
 
+      <div class="card hidden" id="videoCard" style="margin-top:16px;border-color:rgba(45,212,191,.45)">
+        <h2>🎬 障害報告の録画 — Gemini が観た症状</h2>
+        <div id="videoBody"></div>
+      </div>
+
       <div class="card hidden" id="memoryCard" style="margin-top:16px;border-color:rgba(124,140,255,.45)">
         <h2>🧠 過去の類似インシデント — AutoSRE の記憶</h2>
         <div id="memoryBody"></div>
@@ -163,11 +168,12 @@ const CONSOLE_KEY = new URLSearchParams(location.search).get("key") || "";
 function authHeaders(){ return CONSOLE_KEY ? {"Authorization":"Bearer "+CONSOLE_KEY} : {}; }
 
 const ICONS = {
-  get_user_reviews:"💬", recall_similar_cases:"🧠", probe_health:"🌡", get_recent_logs:"📜",
-  get_service_config:"⚙", get_service_status:"📊", open_pull_request:"🔀"
+  get_user_reviews:"💬", analyze_report_video:"🎬", recall_similar_cases:"🧠", probe_health:"🌡",
+  get_recent_logs:"📜", get_service_config:"⚙", get_service_status:"📊", open_pull_request:"🔀"
 };
 const LABELS = {
-  get_user_reviews:"ユーザ報告を確認", recall_similar_cases:"過去の類似事例を想起 (BigQuery)",
+  get_user_reviews:"ユーザ報告を確認", analyze_report_video:"障害報告の録画を解析 (Gemini)",
+  recall_similar_cases:"過去の類似事例を想起 (BigQuery)",
   probe_health:"対象のヘルスを確認", get_recent_logs:"Cloud Logging を読取",
   get_service_config:"デプロイ設定を確認", get_service_status:"リビジョン状態を確認",
   open_pull_request:"修正 PR を起票"
@@ -210,6 +216,8 @@ function handleAgentEvent(ev){
   const tl = document.getElementById("timeline");
   if(ev.type==="tool_call"){
     tl.appendChild(stepLi(ev));
+  }else if(ev.type==="tool_result" && ev.name==="analyze_report_video" && ev.result){
+    renderVideo(ev.result);
   }else if(ev.type==="tool_result" && ev.name==="recall_similar_cases" && ev.result){
     renderMemory(ev.result);
   }else if(ev.type==="final"){
@@ -241,6 +249,7 @@ function resetTimelineForRun(runningText){
   document.getElementById("approveWrap").classList.add("hidden");
   document.getElementById("recoverCard").classList.add("hidden");
   document.getElementById("memoryCard").classList.add("hidden");
+  document.getElementById("videoCard").classList.add("hidden");
 }
 
 function runIncident(){
@@ -307,6 +316,40 @@ function renderMemory(m){
       "</div>";
   }).join("") +
   "<div class='hint'>記憶は仮説 — エージェントはこの後、実ログ・実設定で検証してから結論します。</div>";
+}
+
+// analyze_report_video の結果を「障害報告の録画」カードに描画する。
+// 動画が無効/未添付ならカードは出さない = 従来コンソールと同一表示。
+// 全フィールドは Gemini 出力(信頼できない)なので必ず escapeHtml。
+function renderVideo(v){
+  if(!v || !v.enabled) return;
+  const card=document.getElementById("videoCard");
+  const body=document.getElementById("videoBody");
+  const steps=v.reproduction_steps||[], tl=v.timeline||[];
+  if(v.ok===false){
+    card.classList.remove("hidden");
+    body.innerHTML = "<div class='muted'>録画の解析に失敗しました。実ログ・実設定の証拠で診断を継続します。</div>";
+    return;
+  }
+  if(!v.surfaced_symptom && !steps.length && !tl.length){
+    // 添付なし等: カードを出さない(タイムラインの step 表示だけで十分)。
+    return;
+  }
+  card.classList.remove("hidden");
+  let html="";
+  if(v.surfaced_symptom){
+    html += "<div class='kv'><span class='k'>観測された症状</span><span>"+escapeHtml(String(v.surfaced_symptom))+"</span></div>";
+  }
+  if(steps.length){
+    html += "<div class='stagelabel'>再現手順（録画より）</div><ol style='margin:4px 0 8px;padding-left:20px;font-size:13px'>"+
+      steps.map(s=>"<li>"+escapeHtml(String(s))+"</li>").join("")+"</ol>";
+  }
+  if(tl.length){
+    html += "<div class='stagelabel'>タイムライン</div><div class='evidence'>"+
+      tl.map(e=>escapeHtml(String((e&&e.t)||""))+" · "+escapeHtml(String((e&&e.event)||""))).join("\n")+"</div>";
+  }
+  html += "<div class='hint'>録画は症状 — エージェントはこの後、実ログ・実設定で原因を裏取りしてから結論します。</div>";
+  body.innerHTML = html;
 }
 
 function renderDiagnosis(d){
@@ -400,6 +443,8 @@ async function resetDemo(){
   document.getElementById("approveWrap").classList.add("hidden");
   document.getElementById("recoverCard").classList.add("hidden");
   document.getElementById("escalationCard").classList.add("hidden");
+  document.getElementById("memoryCard").classList.add("hidden");
+  document.getElementById("videoCard").classList.add("hidden");
   const fc=document.getElementById("finaleCard"); fc.classList.add("hidden"); fc.classList.remove("flash");
   document.getElementById("finaleBody").innerHTML="";
   currentReplyDraft=null;

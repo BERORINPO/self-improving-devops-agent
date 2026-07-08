@@ -150,9 +150,26 @@ def _record_case(diagnosis: dict, source: str, service: str, started_ts: float) 
     record_diagnosis(diagnosis, source=source, service=service, duration_s=time.time() - started_ts)
 
 
+def _video_clause(video_ref: str | None) -> str:
+    """Append a screen-recording hint to the incident prompt when one is available.
+
+    Precedence: an explicit per-request video_ref, else AUTOSRE_REPORT_VIDEO_URI
+    (the demo default). Empty on both -> "" -> the agent never calls the video
+    tool = current behavior. Keeps the video feature staged/default-off."""
+    ref = (video_ref or os.environ.get("AUTOSRE_REPORT_VIDEO_URI", "")).strip()
+    if not ref:
+        return ""
+    return (
+        f" A user attached a screen recording at {ref}. "
+        "Call analyze_report_video on it to extract the reproduction steps and timeline "
+        "before you diagnose."
+    )
+
+
 class IncidentRequest(BaseModel):
     service_name: str = "sida-target"
     target_health_url: str | None = None
+    video_ref: str | None = None
 
 
 @app.post("/incident")
@@ -165,6 +182,7 @@ async def incident(req: IncidentRequest) -> dict:
         f"Incident: the Cloud Run service '{req.service_name}' is reported unhealthy. "
         f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
     )
+    incident_text += _video_clause(req.video_ref)
     started = time.time()
     result = await run_incident(incident_text)
     diagnosis = _parse_diagnosis(result["final"])
@@ -239,6 +257,7 @@ async def incident_stream() -> StreamingResponse:
         "Incident: the Cloud Run service 'sida-target' is reported unhealthy. "
         f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
     )
+    incident_text += _video_clause(None)
 
     async def gen():
         yield "retry: 60000\n\n"
@@ -432,6 +451,7 @@ async def pubsub_incident(request: Request) -> dict:
     )
     if detail:
         incident_text += f" Monitoring alert payload (verbatim): {detail}"
+    incident_text += _video_clause(None)
 
     # Stream the autonomous run to every open console (in-process broadcast), then
     # still return the same ack dict shape so the Pub/Sub push ack is unaffected.
