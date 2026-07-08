@@ -168,7 +168,9 @@ async def incident(req: IncidentRequest) -> dict:
     started = time.time()
     result = await run_incident(incident_text)
     diagnosis = _parse_diagnosis(result["final"])
-    _record_case(diagnosis, "manual", req.service_name, started)
+    # to_thread: the sync BigQuery insert must not block the event loop
+    # (a slow insert would freeze /events heartbeats on this single instance).
+    await asyncio.to_thread(_record_case, diagnosis, "manual", req.service_name, started)
     return {
         "steps": result["steps"],
         "outcome": _classify_outcome(diagnosis),
@@ -245,7 +247,9 @@ async def incident_stream() -> StreamingResponse:
             async for ev in run_incident_events(incident_text):
                 if ev.get("type") == "final":
                     diagnosis = _parse_diagnosis(ev["final"])
-                    _record_case(diagnosis, "console", "sida-target", started)
+                    await asyncio.to_thread(
+                        _record_case, diagnosis, "console", "sida-target", started
+                    )
                     ev = {
                         "type": "final",
                         "outcome": _classify_outcome(diagnosis),
@@ -438,7 +442,9 @@ async def pubsub_incident(request: Request) -> dict:
         async for ev in run_incident_events(incident_text):
             if ev.get("type") == "final":
                 diagnosis = _parse_diagnosis(ev["final"])
-                _record_case(diagnosis, "pubsub", "sida-target", started)
+                await asyncio.to_thread(
+                    _record_case, diagnosis, "pubsub", "sida-target", started
+                )
                 _broadcast(
                     {
                         "type": "final",

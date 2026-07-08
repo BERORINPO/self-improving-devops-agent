@@ -270,6 +270,15 @@ function resetForAutonomousRun(){
   const fc=document.getElementById("finaleCard"); fc.classList.add("hidden"); fc.classList.remove("flash");
 }
 
+// 属性値に埋め込む URL の無害化: https 以外のスキーム(javascript:等)は空を返し、
+// 引用符も含めてエスケープする(escapeHtml は &<> のみで属性文脈には不足)。
+function attrSafeUrl(u){
+  u = String(u||"");
+  if(!/^https:\/\//.test(u)) return "";
+  return u.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")
+          .replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
 // 記憶ツール(recall_similar_cases)の結果を「過去の類似インシデント」カードに描画する。
 // 記憶が無効(enabled=false)の間はカードを一切出さない = 従来コンソールと同一表示。
 function renderMemory(m){
@@ -288,11 +297,12 @@ function renderMemory(m){
         ? "<span style='color:#f5b544'>△ 復旧失敗</span>"
         : "<span class='muted'>… 未解決/保留</span>";
     const when = c.when ? new Date(c.when).toLocaleString("ja-JP") : "—";
+    const prUrl = attrSafeUrl(c.pr_url);
     return "<div style='border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;font-size:13px'>"+
       "<div class='muted' style='font-size:11px'>"+escapeHtml(when)+" · "+escapeHtml(String(c.source||""))+" · "+badge+"</div>"+
       "<div style='margin-top:4px'>"+escapeHtml(String(c.root_cause||"—"))+"</div>"+
       (c.missing_env_var? "<div class='muted' style='margin-top:2px'>欠落変数: <code>"+escapeHtml(String(c.missing_env_var))+"</code></div>":"")+
-      (c.pr_url? "<a class='prlink' href='"+escapeHtml(String(c.pr_url))+"' target='_blank' style='font-size:12px'>PR #"+escapeHtml(String(c.pr_number??""))+" →</a>":"")+
+      (prUrl? "<a class='prlink' href='"+prUrl+"' target='_blank' style='font-size:12px'>PR #"+escapeHtml(String(c.pr_number??""))+" →</a>":"")+
       "</div>";
   }).join("") +
   "<div class='hint'>記憶は仮説 — エージェントはこの後、実ログ・実設定で検証してから結論します。</div>";

@@ -7,8 +7,8 @@
 # and joinable with Log Analytics later.
 #
 # Demo scale sits comfortably inside the BigQuery free tier (10 GB storage,
-# 1 TB query/month): rows are ~1 KB and recall queries scan a single day's
-# partition.
+# 1 TB query/month): rows are ~1 KB and recall queries prune both sides of
+# the self-join to a 90-day partition window.
 
 resource "google_bigquery_dataset" "autosre_memory" {
   dataset_id  = "autosre_memory"

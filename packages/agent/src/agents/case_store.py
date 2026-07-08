@@ -61,6 +61,12 @@ def record_diagnosis(diagnosis: dict, source: str, service: str, duration_s: flo
         return
     try:
         confidence = diagnosis.get("confidence")
+        # The model occasionally emits numbers as strings; coerce or drop so a
+        # type mismatch can never fail the INTEGER column insert.
+        try:
+            pr_number = int(diagnosis.get("pr_number"))
+        except (TypeError, ValueError):
+            pr_number = None
         row = {
             "kind": "diagnosis",
             "case_id": uuid.uuid4().hex,
@@ -68,11 +74,12 @@ def record_diagnosis(diagnosis: dict, source: str, service: str, duration_s: flo
             "service": service,
             "source": source,
             "root_cause": str(diagnosis.get("root_cause") or "")[:1000],
-            "missing_env_var": diagnosis.get("missing_env_var"),
-            "action": diagnosis.get("action"),
+            "missing_env_var": (str(diagnosis.get("missing_env_var"))[:200]
+                                if diagnosis.get("missing_env_var") else None),
+            "action": (str(diagnosis.get("action"))[:50] if diagnosis.get("action") else None),
             "confidence": float(confidence) if isinstance(confidence, (int, float)) else None,
-            "pr_url": diagnosis.get("pr_url"),
-            "pr_number": diagnosis.get("pr_number"),
+            "pr_url": (str(diagnosis.get("pr_url"))[:500] if diagnosis.get("pr_url") else None),
+            "pr_number": pr_number,
             "user_reports_summary": str(diagnosis.get("user_reports_summary") or "")[:1000],
             "duration_s": round(duration_s, 1),
         }
@@ -138,6 +145,9 @@ def recall_similar_cases(service_name: str) -> dict:
             FROM `{_cases_table()}` AS d
             LEFT JOIN `{_cases_table()}` AS r
               ON r.kind = 'resolution' AND r.pr_number = d.pr_number
+              -- prune the join side to the same partition window (else the
+              -- self-join scans the whole table as it grows)
+              AND r.ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
             WHERE d.kind = 'diagnosis'
               AND d.service = @service
               AND d.ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)

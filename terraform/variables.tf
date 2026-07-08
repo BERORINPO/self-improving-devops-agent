@@ -75,3 +75,15 @@ variable "target_secret_key" {
   type        = string
   default     = "demo-secret-0000-rotate-me"
 }
+
+variable "enable_case_memory" {
+  description = <<-EOT
+    Staged enablement for the self-improving loop (case memory). false keeps
+    AUTOSRE_CASES_TABLE empty on the agent service = feature fully off
+    (recording no-ops, recall reports enabled=false), matching the default-off
+    contract of the other AUTOSRE_* capabilities. The BigQuery dataset/table
+    are still created so flipping this on is a config-only change.
+  EOT
+  type        = bool
+  default     = false
+}

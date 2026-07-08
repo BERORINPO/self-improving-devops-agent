@@ -94,9 +94,15 @@ resource "google_cloud_run_v2_service" "agent" {
       env {
         # Case memory (self-improving loop). Empty disables the feature
         # (recording no-ops, recall reports enabled=false) — default-off
-        # staged enablement, same contract as the other AUTOSRE_* flags.
+        # staged enablement gated by var.enable_case_memory, same contract
+        # as the other AUTOSRE_* flags. Dataset/table exist either way, so
+        # enabling is a config-only change.
         name  = "AUTOSRE_CASES_TABLE"
-        value = "${var.project_id}.${google_bigquery_dataset.autosre_memory.dataset_id}.${google_bigquery_table.cases.table_id}"
+        value = (
+          var.enable_case_memory
+          ? "${var.project_id}.${google_bigquery_dataset.autosre_memory.dataset_id}.${google_bigquery_table.cases.table_id}"
+          : ""
+        )
       }
     }
   }
