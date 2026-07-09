@@ -25,6 +25,19 @@ resource "google_project_iam_member" "runtime_sa_roles" {
   depends_on = [google_project_service.required]
 }
 
+# Prompt-injection screening (Model Armor). The modelarmor.googleapis.com API is
+# enabled unconditionally (harmless, like bigquery in apis.tf), but this SA role
+# is granted ONLY when the feature is enabled — so a default-off deploy has no
+# USABLE Model Armor surface (no role = the runtime SA cannot call the API).
+resource "google_project_iam_member" "runtime_sa_model_armor" {
+  count   = var.enable_model_armor ? 1 : 0
+  project = var.project_id
+  role    = "roles/modelarmor.user"
+  member  = "serviceAccount:${local.runtime_sa}"
+
+  depends_on = [google_project_service.required]
+}
+
 # Required on a fresh project so Pub/Sub can mint OIDC tokens as the runtime
 # SA for the push subscription. (On long-lived projects this grant often
 # already exists; it is idempotent and mirrors what the push subscription

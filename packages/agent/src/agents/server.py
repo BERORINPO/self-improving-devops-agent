@@ -459,7 +459,15 @@ async def pubsub_incident(request: Request) -> dict:
         f"Its health endpoint is {health_url}. Investigate and diagnose the single root cause."
     )
     if detail:
+        # Screen the (semi-trusted) alert payload for injection before splicing it
+        # into the prompt (Model Armor; default-off no-op). Fail-open + annotate:
+        # a flagged payload is still passed through, with a hardened warning clause.
+        from agents.armor_tools import clause as _armor_clause
+        from agents.armor_tools import screen_text as _armor_screen
+
+        _armor = _armor_screen(detail, source="alert_payload")
         incident_text += f" Monitoring alert payload (verbatim): {detail}"
+        incident_text += _armor_clause(_armor)
     incident_text += _video_clause(None)
 
     # Stream the autonomous run to every open console (in-process broadcast), then

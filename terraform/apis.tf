@@ -13,6 +13,7 @@ resource "google_project_service" "required" {
     "artifactregistry.googleapis.com", # cloud-run-source-deploy repository
     "logging.googleapis.com",          # agent reads logs during diagnosis
     "bigquery.googleapis.com",         # case memory (self-improving loop)
+    "modelarmor.googleapis.com",       # prompt-injection screening (default-off)
   ])
 
   project            = var.project_id
