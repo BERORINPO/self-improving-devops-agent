@@ -1,6 +1,6 @@
-# ⚠️ PIPELINE DEMO — STUB AGENT, NOT REAL NUMBERS
+# WARNING: PIPELINE DEMO - STUB AGENT, NOT REAL NUMBERS
 
-This sample shows the report FORMAT using a stub agent that is correct by construction (all-grounded, GT-correct). The real Gemini benchmark numbers are produced at 7/24 deploy (or with google-adk installed locally) via `runner.real_agent_diagnose`. Do NOT read the 100% below as a result.
+This sample shows the report FORMAT using a stub agent that is correct by construction. Real Gemini numbers come at 7/24 deploy (or with google-adk installed) via runner.real_agent_diagnose. Do NOT read the 100% below as a result.
 
 ---
 

@@ -117,11 +117,13 @@ def build_mock_tools(scn, memory_arm: str = "off") -> dict:
     def recall_similar_cases(service_name):  # noqa: ARG001
         return _recall(scn, memory_arm)
 
+    cfg_names_upper = {k.upper() for k in cfg["env_vars"]}
+
     def open_pull_request(missing_env_var, root_cause):  # noqa: ARG001
         var = str(missing_env_var or "").strip()
         if var.upper() not in allowed:
             return {"ok": False, "error": f"'{var}' is not in the allowed remediation set"}
-        if var in cfg["env_vars"]:  # present (incl. empty) -> already present
+        if var.upper() in cfg_names_upper:  # present (incl. empty) -> already present
             return {"ok": False, "error": f"{var} already present in config"}
         return {"ok": True, "pr_number": 100, "pr_url": f"https://github.com/x/y/pull/100",
                 "branch": f"autosre/fix-{var.lower()}"}

@@ -23,36 +23,58 @@ MEMORY_ARMS = ("off", "on-correct", "on-poisoned")
 def real_agent_diagnose(scn, tools, memory_arm):  # pragma: no cover - needs Gemini+ADK
     """Run the real ADK agent with mock tools patched in. Returns {final_text, steps, duration_s}.
 
-    Imported lazily so the offline test never needs google-adk installed.
+    Imported lazily so the offline test never needs google-adk installed. Both the
+    tool references AND the scenario-scoped env (AUTOSRE_ALLOWED_ENV_VARS /
+    AUTOSRE_RESTORE_* / AUTOSRE_CASES_TABLE) are set so the real agent's
+    instruction matches the mock (e.g. S02's extended allowlist reaches the model),
+    then restored so runs never leak into each other.
     """
+    import asyncio
+    import os
+
     import agents.agent as agent_mod
     from agents.agent import run_incident
 
-    # Patch the tool references the agent imported (same technique as the smoke
-    # tests' fake injection). Save + restore so runs don't leak into each other.
-    saved = {}
+    saved_attrs, saved_env = {}, {}
+
+    def _set_env(key, val):
+        saved_env[key] = os.environ.get(key)
+        if val is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = val
+
     for name, fn in tools.items():
         if hasattr(agent_mod, name):
-            saved[name] = getattr(agent_mod, name)
+            saved_attrs[name] = getattr(agent_mod, name)
             setattr(agent_mod, name, fn)
+    # Scenario-scoped env so the model's remediation policy == the mock guard.
+    _set_env("AUTOSRE_ALLOWED_ENV_VARS", ",".join(scn.allowed_set))
+    for var in scn.required_env:
+        _set_env(f"AUTOSRE_RESTORE_{var}", f"<restore-{var.lower()}>")
+    # Memory arm: only the on-* arms advertise a cases table (recall is mocked).
+    _set_env("AUTOSRE_CASES_TABLE", "" if memory_arm == "off" else "eval.mock.cases")
     try:
-        import asyncio
-
         incident_text = (
-            f"Incident: the Cloud Run service 'sida-target' is reported unhealthy. "
-            f"Its health endpoint is https://sida-target.example/health. "
-            f"Investigate and diagnose the single root cause."
+            "Incident: the Cloud Run service 'sida-target' is reported unhealthy. "
+            "Its health endpoint is https://sida-target.example/health. "
+            "Investigate and diagnose the single root cause."
         )
         started = time.time()
-        result = asyncio.get_event_loop().run_until_complete(run_incident(incident_text))
+        result = asyncio.run(run_incident(incident_text))
         return {
             "final_text": result["final"],
             "steps": result["steps"],
             "duration_s": time.time() - started,
         }
     finally:
-        for name, fn in saved.items():
+        for name, fn in saved_attrs.items():
             setattr(agent_mod, name, fn)
+        for key, val in saved_env.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
 
 
 def run_eval(diagnose, reps: int = 5, arms=MEMORY_ARMS, scenarios=SCENARIOS) -> dict:
