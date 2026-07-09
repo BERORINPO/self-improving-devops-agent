@@ -83,3 +83,14 @@ jobs:
         shell: bash
         run: |
           find src -name '*.py' -print0 | xargs -0 python -m py_compile
+
+      # Offline smoke gates: pure-stdlib (fake GCP/Gemini injected), no network.
+      # The eval judge is the deterministic gate the eval spec requires; the
+      # case_store / video_tools contracts ride along (all default-off, never-raises).
+      - name: offline smoke tests (deterministic, no GCP)
+        if: steps.detect.outputs.exists == 'true'
+        shell: bash
+        run: |
+          python scripts/test_eval_judge_local.py
+          python scripts/test_case_store_local.py
+          python scripts/test_video_tools_local.py
