@@ -86,7 +86,8 @@ jobs:
 
       # Offline smoke gates: pure-stdlib (fake GCP/Gemini injected), no network.
       # The eval judge is the deterministic gate the eval spec requires; the
-      # case_store / video_tools contracts ride along (all default-off, never-raises).
+      # case_store / video_tools / armor_tools contracts ride along (all
+      # default-off, never-raises).
       - name: offline smoke tests (deterministic, no GCP)
         if: steps.detect.outputs.exists == 'true'
         shell: bash
@@ -94,3 +95,4 @@ jobs:
           python scripts/test_eval_judge_local.py
           python scripts/test_case_store_local.py
           python scripts/test_video_tools_local.py
+          python scripts/test_armor_tools_local.py

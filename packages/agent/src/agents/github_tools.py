@@ -69,7 +69,17 @@ def get_user_reviews(limit: int = 10) -> dict:
                 for i in r.json()
                 if "pull_request" not in i
             ]
-            return {"ok": True, "count": len(reviews), "reviews": reviews}
+            # Second-layer injection screen (Model Armor; default-off no-op).
+            # Flags a prompt-injection / jailbreak embedded in a user report so the
+            # agent and console can see it — the open_pull_request allowlist guard
+            # is still the backstop that makes an injected "fix" impossible.
+            from agents.armor_tools import screen_text  # lazy import (default-off)
+
+            armor = screen_text(
+                "\n".join(f"{r['title']}\n{r['body']}" for r in reviews),
+                source="user_report",
+            )
+            return {"ok": True, "count": len(reviews), "reviews": reviews, "armor": armor}
     except httpx.HTTPStatusError as e:
         return {"ok": False, "error": f"GitHub {e.response.status_code}: {e.response.text[:200]}"}
     except Exception as e:  # noqa: BLE001

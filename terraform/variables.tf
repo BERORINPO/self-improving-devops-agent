@@ -87,3 +87,26 @@ variable "enable_case_memory" {
   type        = bool
   default     = false
 }
+
+variable "enable_model_armor" {
+  description = <<-EOT
+    Staged enablement for the prompt-injection screening layer (Model Armor).
+    false keeps AUTOSRE_MODEL_ARMOR_ENABLED empty on the agent = feature fully
+    off (screen_text no-ops, reports enabled=false), matching the default-off
+    contract of the other AUTOSRE_* capabilities. No Model Armor cost or IAM
+    grant is incurred until this is flipped on and a template is supplied.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "model_armor_template" {
+  description = <<-EOT
+    Full Model Armor template resource name the agent screens user reports
+    against: projects/<project>/locations/<location>/templates/<id>. Created
+    out-of-band (gcloud model-armor templates create ...) with a prompt-injection
+    & jailbreak filter. Only used when enable_model_armor = true.
+  EOT
+  type        = string
+  default     = ""
+}

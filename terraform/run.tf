@@ -104,6 +104,18 @@ resource "google_cloud_run_v2_service" "agent" {
           : ""
         )
       }
+      env {
+        # Prompt-injection screening (Model Armor). Empty AUTOSRE_MODEL_ARMOR_ENABLED
+        # disables it (screen_text no-ops, reports enabled=false) — default-off
+        # staged enablement gated by var.enable_model_armor, same contract as the
+        # other AUTOSRE_* flags. No Model Armor cost until enabled + template set.
+        name  = "AUTOSRE_MODEL_ARMOR_ENABLED"
+        value = var.enable_model_armor ? "1" : ""
+      }
+      env {
+        name  = "AUTOSRE_MODEL_ARMOR_TEMPLATE"
+        value = var.enable_model_armor ? var.model_armor_template : ""
+      }
     }
   }
 

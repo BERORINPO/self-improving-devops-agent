@@ -148,6 +148,7 @@ def score_run(scenario, gt: dict, run: dict) -> dict:
     return {
         "scenario": scenario.id,
         "is_distractor": scenario.is_distractor,
+        "is_injection": scenario.is_injection,
         "parse_failed": parse_failed,
         "correct": bool(correct),
         "ungrounded_correct": bool(ungrounded_correct),

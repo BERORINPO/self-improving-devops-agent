@@ -124,6 +124,11 @@
         <div id="videoBody"></div>
       </div>
 
+      <div class="card hidden" id="armorCard" style="margin-top:16px;border-color:rgba(245,181,68,.45)">
+        <h2>🛡 Model Armor — 報告のインジェクション検査</h2>
+        <div id="armorBody"></div>
+      </div>
+
       <div class="card hidden" id="memoryCard" style="margin-top:16px;border-color:rgba(124,140,255,.45)">
         <h2>🧠 過去の類似インシデント — AutoSRE の記憶</h2>
         <div id="memoryBody"></div>
@@ -220,6 +225,8 @@ function handleAgentEvent(ev){
     renderVideo(ev.result);
   }else if(ev.type==="tool_result" && ev.name==="recall_similar_cases" && ev.result){
     renderMemory(ev.result);
+  }else if(ev.type==="tool_result" && ev.name==="get_user_reviews" && ev.result && ev.result.armor){
+    renderArmor(ev.result.armor);
   }else if(ev.type==="final"){
     const d = ev.diagnosis||{}; renderDiagnosis(d);
     currentReplyDraft = d.user_reply_draft || null;
@@ -250,6 +257,7 @@ function resetTimelineForRun(runningText){
   document.getElementById("recoverCard").classList.add("hidden");
   document.getElementById("memoryCard").classList.add("hidden");
   document.getElementById("videoCard").classList.add("hidden");
+  document.getElementById("armorCard").classList.add("hidden");
 }
 
 function runIncident(){
@@ -316,6 +324,30 @@ function renderMemory(m){
       "</div>";
   }).join("") +
   "<div class='hint'>記憶は仮説 — エージェントはこの後、実ログ・実設定で検証してから結論します。</div>";
+}
+
+// get_user_reviews に同梱される Model Armor のインジェクション検査結果を描画する。
+// 無効(enabled=false)ならカードは出さない = 従来コンソールと同一表示。
+// categories/note/error は信頼できない経路を通りうるため必ず escapeHtml。
+function renderArmor(a){
+  if(!a || !a.enabled) return;
+  const card=document.getElementById("armorCard");
+  const body=document.getElementById("armorBody");
+  card.classList.remove("hidden");
+  if(a.screened===false){
+    body.innerHTML = "<div class='muted'>検査スキップ（"+escapeHtml(String(a.note||a.error||"設定未完"))+
+      "）— 修正 PR は allowlist ガード + 実証拠で最終的に守られます。</div>";
+    return;
+  }
+  if(a.flagged){
+    const cats=(a.categories||[]).map(c=>escapeHtml(String(c))).join(", ");
+    body.innerHTML = "<div style='color:#f5b544'>⚠ インジェクション / ジェイルブレイクの疑いを検出"+
+      (cats? "（"+cats+"）":"")+"</div>"+
+      "<div class='hint'>報告は症状としてのみ扱い、埋め込まれた指示には従いません。"+
+      "修正 PR は allowlist ガードと実ログ・実設定の裏取りを通過したものだけです。</div>";
+  }else{
+    body.innerHTML = "<div style='color:#39d98a'>✓ 報告にインジェクションは検出されませんでした</div>";
+  }
 }
 
 // analyze_report_video の結果を「障害報告の録画」カードに描画する。

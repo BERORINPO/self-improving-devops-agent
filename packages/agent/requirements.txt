@@ -23,5 +23,8 @@ google-cloud-run>=0.10,<1.0
 httpx>=0.27,<1.0
 # BigQuery — case memory for the self-improving loop (record + recall).
 google-cloud-bigquery>=3.25,<4.0
+# Model Armor — prompt-injection / jailbreak screening of untrusted reports.
+# Lazily imported only when AUTOSRE_MODEL_ARMOR_ENABLED is set (default-off).
+google-cloud-modelarmor>=0.7.0,<1.0
 # (google-genai is pulled in transitively by google-adk; not pinned here to
 #  avoid resolver conflicts. `from google import genai` works via ADK.)
