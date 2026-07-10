@@ -1,7 +1,7 @@
 """Offline unit smoke for agent._summarize_result (pure function, no cloud).
 
-Covers: per-tool bounded summaries, ERROR-line extraction from logs (including
-malformed entries), non-dict input, unknown tools, and the never-raises contract.
+Covers: per-tool bounded summaries, raw-log omission (including malformed
+entries), non-dict input, unknown tools, and the never-raises contract.
 
 Run: PYTHONPATH=packages/agent/src python scripts/test_summarize_local.py
 """
@@ -33,14 +33,13 @@ s = _summarize_result("get_recent_logs", {"ok": True, "count": 3, "entries": [
     {"severity": "ERROR", "text": None},
     {"severity": "ERROR", "text": "E" * 500},
 ]})
-check("logs_first_error_extraction", s is not None and s["count"] == 3
-      and s["first_error"] == "" or (s and len(s["first_error"] or "") <= 160), str(s))
-# 最初の ERROR は text=None -> 空文字に落ちる (TypeError にならない) こと自体が契約
+check("logs_bounded_without_body", s == {"ok": True, "count": 3}, str(s))
 check("logs_malformed_entries_never_raise", s is not None and s.get("ok") is True, str(s))
 
 s = _summarize_result("get_recent_logs", {"ok": True, "count": 1, "entries": [
-    {"severity": "ERROR", "text": "startup check failed: DATABASE_URL is not set"}]})
-check("logs_error_text", s["first_error"] == "startup check failed: DATABASE_URL is not set", str(s))
+    {"severity": "ERROR", "text": "Authorization: Bearer super-secret-token"}]})
+check("logs_secret_not_exposed", s == {"ok": True, "count": 1}
+      and "super-secret-token" not in repr(s) and "first_error" not in s, str(s))
 
 s = _summarize_result("get_service_config",
                       {"ok": True, "env_var_names": ["A", "B", "C"], "env_vars": {"A": "secret!"}})
@@ -52,7 +51,14 @@ check("pr_summary", s == {"ok": True, "pr_number": 29,
                           "pr_url": "https://github.com/x/y/pull/29"}, str(s))
 
 check("recall_summary", _summarize_result("recall_similar_cases",
-      {"enabled": True, "count": 2, "cases": [{}, {}]}) == {"enabled": True, "count": 2})
+      {"ok": True, "enabled": True, "count": 2, "cases": [{}, {}]})
+      == {"enabled": True, "ok": True, "count": 2})
+check("recall_outage_preserves_failure", _summarize_result("recall_similar_cases",
+      {"ok": False, "enabled": True, "cases": [], "error": "backend down"})
+      == {"enabled": True, "ok": False, "count": None})
+check("recall_disabled_preserves_state", _summarize_result("recall_similar_cases",
+      {"ok": True, "enabled": False, "cases": []})
+      == {"enabled": False, "ok": True, "count": None})
 
 s = _summarize_result("analyze_report_video",
                       {"enabled": True, "ok": True, "reproduction_steps": ["a", "b"],

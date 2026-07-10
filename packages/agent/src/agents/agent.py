@@ -136,12 +136,8 @@ def _summarize_result(name: str, r) -> dict | None:
             return {"ok": r.get("ok"), "status_code": r.get("status_code"),
                     "healthy": r.get("healthy")}
         if name == "get_recent_logs":
-            first_error = next(
-                (str(e.get("text") or "")[:160] for e in (r.get("entries") or [])
-                 if isinstance(e, dict)
-                 and str(e.get("severity", "")).upper() in ("ERROR", "CRITICAL", "ALERT")),
-                None)
-            return {"ok": r.get("ok"), "count": r.get("count"), "first_error": first_error}
+            # Never surface raw log text to unauthenticated console SSE streams.
+            return {"ok": r.get("ok"), "count": r.get("count")}
         if name == "get_service_config":
             names = r.get("env_var_names") or []
             return {"ok": r.get("ok"), "env_count": len(names)}
@@ -152,7 +148,7 @@ def _summarize_result(name: str, r) -> dict | None:
             return {"ok": r.get("ok"), "pr_number": r.get("pr_number"),
                     "pr_url": r.get("pr_url")}
         if name == "recall_similar_cases":
-            return {"enabled": r.get("enabled"), "count": r.get("count")}
+            return {"enabled": r.get("enabled"), "ok": r.get("ok"), "count": r.get("count")}
         if name == "analyze_report_video":
             return {"enabled": r.get("enabled"), "ok": r.get("ok"),
                     "steps": len(r.get("reproduction_steps") or []),
@@ -190,6 +186,8 @@ async def run_incident(incident_text: str, model: str = DEFAULT_MODEL) -> dict:
             step = {"type": "tool_result", "name": resp.name}
             # Surface the memory/video payloads so callers can show WHAT the agent
             # recalled and what it saw in the report video.
+            # SECURITY: this allowlist feeds unauthenticated SSE. Never add tools
+            # that return raw logs or plaintext env values (e.g. get_service_config).
             if resp.name in ("recall_similar_cases", "analyze_report_video", "get_user_reviews") and isinstance(
                 resp.response, dict
             ):
@@ -230,6 +228,8 @@ async def run_incident_events(incident_text: str, model: str = DEFAULT_MODEL):
             ev = {"type": "tool_result", "name": resp.name}
             # The console renders the "past similar incidents" and "report video"
             # cards from these payloads.
+            # SECURITY: this allowlist feeds unauthenticated SSE. Never add tools
+            # that return raw logs or plaintext env values (e.g. get_service_config).
             if resp.name in ("recall_similar_cases", "analyze_report_video", "get_user_reviews") and isinstance(
                 resp.response, dict
             ):
