@@ -75,6 +75,12 @@
   .flash{animation:finaleGlow 1.6s ease-out 2}
   @keyframes finaleGlow{0%{box-shadow:0 0 0 0 rgba(74,222,128,.45)}
     70%{box-shadow:0 0 0 14px rgba(74,222,128,0)}100%{box-shadow:none}}
+  .explabel{font-size:11px;letter-spacing:.08em;color:var(--muted);font-family:var(--mono)}
+  .expnum{font-size:26px;font-weight:700;font-family:var(--mono);line-height:1.25}
+  .expunit{font-size:12px;color:var(--muted);margin-left:4px;font-weight:400}
+  .tickup{animation:tickGlow 1.2s ease-out 2}
+  @keyframes tickGlow{0%{text-shadow:0 0 0 rgba(74,222,128,0)}
+    30%{text-shadow:0 0 18px rgba(74,222,128,.85)}100%{text-shadow:none}}
   .hidden{display:none}
   footer{margin-top:26px;color:var(--muted);font-size:11.5px;text-align:center;
          font-family:var(--mono);letter-spacing:.06em}
@@ -98,9 +104,21 @@
     <div class="pill" id="targetPill"><span class="dot" id="targetDot"></span><span id="targetText">対象を確認中…</span></div>
   </header>
 
+  <div class="card hidden" id="expCard" style="margin-bottom:16px">
+    <h2>AutoSRE の経験 — 自己学習の記録 (BigQuery)</h2>
+    <div class="row" style="gap:28px;flex-wrap:wrap;align-items:flex-end">
+      <div><div class="explabel">学習済インシデント</div>
+        <div class="expnum"><span id="expCases">–</span><span class="expunit">件</span></div></div>
+      <div><div class="explabel">復旧実証済 (承認 + 503→200 確認)</div>
+        <div class="expnum" style="color:var(--good)"><span id="expVerified">–</span><span class="expunit">件</span></div></div>
+      <div style="flex:1;min-width:240px" class="hint">対応した障害を記憶し、次の診断で自分の過去事例から想起します — 対応するほど速く、確実になります。記憶はデモをリセットしても消えません。</div>
+    </div>
+  </div>
+
   <div class="card" id="userReportsCard" style="margin-bottom:16px">
     <h2>ユーザからの声 <span class="muted" id="urCount"></span></h2>
     <div id="userReports" class="muted">読み込み中…</div>
+    <div id="urAttachment" class="hint hidden">報告にはユーザの画面録画が添付されています — Run 時に Gemini が視聴し、症状と再現手順を抽出します。</div>
   </div>
 
   <div class="grid">
@@ -179,6 +197,34 @@
 <script>
 let currentPr = null;
 let currentReplyDraft = null;
+let consoleMeta = {memory:{}, video:{}};
+
+// 経験値パネル: /console-meta の記憶カウンタを描画する。
+// 未設定 (enabled=false) / 取得失敗時はカードを出さない = 従来コンソールと同一表示。
+// 戻り値: 前回取得値からの増分フラグ (approve 後の「学習しました」表示の裏取りに使う)。
+async function loadConsoleMeta(animateTick){
+  try{
+    const r = await fetch("/console-meta"); const j = await r.json();
+    const prev = (consoleMeta && consoleMeta.memory) || {};
+    consoleMeta = j || {memory:{}, video:{}};
+    const m = consoleMeta.memory || {};
+    if(consoleMeta.video && consoleMeta.video.available){
+      document.getElementById("urAttachment").classList.remove("hidden");
+    }
+    if(!m.enabled || m.ok===false) return null;
+    document.getElementById("expCard").classList.remove("hidden");
+    const casesUp = typeof prev.learned_cases==="number" && m.learned_cases > prev.learned_cases;
+    const verifiedUp = typeof prev.verified_recoveries==="number" && m.verified_recoveries > prev.verified_recoveries;
+    setExpNum("expCases", m.learned_cases, animateTick && casesUp);
+    setExpNum("expVerified", m.verified_recoveries, animateTick && verifiedUp);
+    return {casesIncreased: casesUp, verifiedIncreased: verifiedUp};
+  }catch(e){ return null; /* メタ取得失敗はカード非表示のまま */ }
+}
+function setExpNum(id, v, tick){
+  const el = document.getElementById(id);
+  el.textContent = (typeof v==="number") ? String(v) : "–";
+  if(tick){ el.classList.remove("tickup"); void el.offsetWidth; el.classList.add("tickup"); }
+}
 
 // URL の ?key= を一度だけ読む。未指定なら認証ヘッダを付けない（今日と完全に同一の挙動）。
 const CONSOLE_KEY = new URLSearchParams(location.search).get("key") || "";
@@ -252,6 +298,8 @@ function handleAgentEvent(ev){
     document.getElementById("running").classList.add("hidden");
     runInProgress = false;
     document.getElementById("runBtn").disabled=false;
+    // 1 回の診断 = 1 件の学習 (diagnosis 行が記録される)。カウンタをその場で更新。
+    loadConsoleMeta(true);
   }
 }
 
@@ -365,6 +413,18 @@ function renderArmor(a){
 // analyze_report_video の結果を「障害報告の録画」カードに描画する。
 // 動画が無効/未添付ならカードは出さない = 従来コンソールと同一表示。
 // 全フィールドは Gemini 出力(信頼できない)なので必ず escapeHtml。
+// /report-video は key ゲート付き。<video> はヘッダを送れないので ?key= を付ける。
+// CONSOLE_KEY は URL 由来だが encodeURIComponent + 引用属性で安全に埋め込む。
+function reportVideoPlayerHtml(){
+  if(!(consoleMeta.video && consoleMeta.video.available)) return "";
+  // encodeURIComponent は ' を残すため、単一引用符属性向けに %27 まで潰す (defense-in-depth)
+  const src = ("/report-video" + (CONSOLE_KEY ? "?key="+encodeURIComponent(CONSOLE_KEY) : ""))
+              .replace(/'/g, "%27");
+  return "<video controls preload='metadata' style='width:100%;max-height:260px;background:#000;"+
+    "border:1px solid var(--line);border-radius:6px' src='"+src+"'></video>"+
+    "<div class='hint' style='margin-top:4px'>Gemini が視聴した実際の添付録画 (gs:// 上の同一オブジェクト)</div>";
+}
+
 function renderVideo(v){
   if(!v || !v.enabled) return;
   const card=document.getElementById("videoCard");
@@ -372,7 +432,8 @@ function renderVideo(v){
   const steps=v.reproduction_steps||[], tl=v.timeline||[];
   if(v.ok===false){
     card.classList.remove("hidden");
-    body.innerHTML = "<div class='muted'>録画の解析に失敗しました。実ログ・実設定の証拠で診断を継続します。</div>";
+    body.innerHTML = reportVideoPlayerHtml() +
+      "<div class='muted'>録画の解析に失敗しました。実ログ・実設定の証拠で診断を継続します。</div>";
     return;
   }
   if(!v.surfaced_symptom && !steps.length && !tl.length){
@@ -380,7 +441,7 @@ function renderVideo(v){
     return;
   }
   card.classList.remove("hidden");
-  let html="";
+  let html=reportVideoPlayerHtml();
   if(v.surfaced_symptom){
     html += "<div class='kv'><span class='k'>観測された症状</span><span>"+escapeHtml(String(v.surfaced_symptom))+"</span></div>";
   }
@@ -467,6 +528,16 @@ async function approve(){
       fc.classList.remove("flash"); void fc.offsetWidth; fc.classList.add("flash");
     }
     await refreshTarget();
+    if(rec){
+      // 学習ループの締め: resolution 行が記録されたかを実カウンタの増分で裏取りしてから表示する
+      // (表示が先行して「記憶した」と言わない — insert 失敗時は何も出さない)。
+      const g = await loadConsoleMeta(true);
+      if(g && g.verifiedIncreased && consoleMeta.memory){
+        document.getElementById("recoverBody").innerHTML +=
+          "<div class='hint' style='color:var(--good)'>学習: この復旧結果を記憶しました (復旧実証済 "+
+          Number(consoleMeta.memory.verified_recoveries)+" 件目) — 次回の診断で想起されます。</div>";
+      }
+    }
     btn.innerHTML = rec? "✓ 復旧完了" : "再試行";
     btn.disabled = rec? true : false;
   }catch(e){
@@ -516,6 +587,7 @@ async function loadUserReports(){
 }
 
 loadUserReports();
+loadConsoleMeta();
 refreshTarget();
 setInterval(refreshTarget, 15000);
 

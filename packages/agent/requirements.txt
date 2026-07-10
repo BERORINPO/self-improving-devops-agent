@@ -26,5 +26,9 @@ google-cloud-bigquery>=3.25,<4.0
 # Model Armor — prompt-injection / jailbreak screening of untrusted reports.
 # Lazily imported only when AUTOSRE_MODEL_ARMOR_ENABLED is set (default-off).
 google-cloud-modelarmor>=0.7.0,<1.0
+# GCS read — /report-video streams the demo recording (the object Gemini watches)
+# to the console. Already a transitive dep of google-cloud-aiplatform; pinned
+# explicitly because server.py now imports it directly.
+google-cloud-storage>=2.14,<4.0
 # (google-genai is pulled in transitively by google-adk; not pinned here to
 #  avoid resolver conflicts. `from google import genai` works via ADK.)

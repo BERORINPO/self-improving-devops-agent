@@ -148,6 +148,9 @@ def _record_case(diagnosis: dict, source: str, service: str, started_ts: float) 
     from agents.case_store import record_diagnosis  # lazy import (matches codebase style)
 
     record_diagnosis(diagnosis, source=source, service=service, duration_s=time.time() - started_ts)
+    # A new diagnosis row changes the learned-cases counter -> next /console-meta
+    # must recompute (keeps the console's learn-tick fresh despite the TTL cache).
+    _invalidate_console_meta()
 
 
 def _video_clause(video_ref: str | None) -> str:
@@ -253,6 +256,9 @@ def approve(req: ApproveRequest, request: Request) -> dict:
     from agents.case_store import record_resolution
 
     record_resolution(req.pr_number, bool(verify.get("recovered")), time.time() - started)
+    # The verified-recoveries counter just changed -> the console refetches
+    # /console-meta right after this response; bypass the TTL cache for it.
+    _invalidate_console_meta()
     return {"merge": merge, "apply": applied, "verify": verify}
 
 
@@ -318,6 +324,97 @@ def user_reports() -> dict:
     from agents.github_tools import get_user_reviews
 
     return get_user_reviews()
+
+
+# Unauthenticated endpoint -> a request loop must not amplify into BigQuery jobs
+# (CISO WARN): serve from a short in-process cache, invalidated on the two events
+# that actually change the counters (diagnosis recorded / resolution recorded) so
+# the console's learn-tick after /approve is never served stale.
+_console_meta_cache: dict = {"ts": 0.0, "data": None}
+_CONSOLE_META_TTL_S = 30.0
+
+
+def _invalidate_console_meta() -> None:
+    _console_meta_cache["ts"] = 0.0
+
+
+@app.get("/console-meta")
+def console_meta() -> dict:
+    """Read-only console metadata: case-memory growth counters + report-video availability.
+
+    Both capabilities follow the default-off contract, so this endpoint degrades to
+    {"enabled": false} sections on an unconfigured deploy. Counts only — no case
+    content — so it stays as open as /target-health and /user-reports.
+    """
+    now = time.time()
+    if _console_meta_cache["data"] is not None and now - _console_meta_cache["ts"] < _CONSOLE_META_TTL_S:
+        return _console_meta_cache["data"]
+    from agents.case_store import memory_stats
+    from agents.video_tools import enabled as video_enabled
+
+    video_ref = os.environ.get("AUTOSRE_REPORT_VIDEO_URI", "").strip()
+    data = {
+        "memory": memory_stats(),
+        # same predicate as /report-video's own gate, so "available" can never
+        # advertise a player that would then 404 (misconfigured non-gs:// URI)
+        "video": {"enabled": video_enabled(),
+                  "available": bool(video_enabled() and video_ref.startswith("gs://"))},
+    }
+    _console_meta_cache.update(ts=now, data=data)
+    return data
+
+
+# The demo clip is seconds long; anything bigger points at a misconfigured URI.
+_REPORT_VIDEO_MAX_BYTES = 50 * 1024 * 1024
+
+
+@app.get("/report-video")
+def report_video(request: Request):
+    """Serve the demo report recording — the exact gs:// object Gemini watches.
+
+    Buffered fetch (the demo clip is seconds long, size-capped) with single-range
+    support: Safari refuses to play media whose server ignores Range requests, so
+    a `Range:` header gets a proper 206 slice. Key-gated like /approve (the
+    <video> tag cannot send headers, so the console appends ?key=). The object
+    path comes ONLY from AUTOSRE_REPORT_VIDEO_URI; no caller input reaches GCS,
+    so this can never become an arbitrary-read oracle.
+    """
+    _check_console_key(request)
+    from fastapi.responses import Response
+
+    from agents.video_tools import enabled as video_enabled
+    from agents.video_tools import mime_for
+
+    ref = os.environ.get("AUTOSRE_REPORT_VIDEO_URI", "").strip()
+    if not (video_enabled() and ref.startswith("gs://")):
+        raise HTTPException(status_code=404, detail="report video not configured")
+    try:
+        from google.cloud import storage  # lazy import (matches codebase style)
+
+        bucket_name, _, blob_name = ref.removeprefix("gs://").partition("/")
+        client = storage.Client(project=os.environ.get("GOOGLE_CLOUD_PROJECT") or None)
+        blob = client.bucket(bucket_name).get_blob(blob_name, timeout=15.0)
+        if blob is None:
+            raise HTTPException(status_code=404, detail="report video object not found")
+        if (blob.size or 0) > _REPORT_VIDEO_MAX_BYTES:
+            raise HTTPException(status_code=502, detail="report video exceeds size cap")
+        data = blob.download_as_bytes(timeout=30.0)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 - degrade to an error status, never a 500 traceback
+        print(json.dumps({"severity": "WARNING", "event": "report_video_fetch_failed",
+                          "error": f"{type(e).__name__}: {e}"}), flush=True)
+        raise HTTPException(status_code=502, detail="report video fetch failed")
+    media = mime_for(ref)
+    common = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600",
+              "X-Content-Type-Options": "nosniff"}
+    m = re.match(r"bytes=(\d+)-(\d*)$", request.headers.get("range", ""))
+    if m and int(m.group(1)) < len(data):
+        start = int(m.group(1))
+        end = min(int(m.group(2)) if m.group(2) else len(data) - 1, len(data) - 1)
+        return Response(content=data[start:end + 1], status_code=206, media_type=media,
+                        headers={**common, "Content-Range": f"bytes {start}-{end}/{len(data)}"})
+    return Response(content=data, media_type=media, headers=common)
 
 
 _last_auto_trigger = {"ts": 0.0}

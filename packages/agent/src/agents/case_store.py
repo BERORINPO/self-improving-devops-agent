@@ -112,6 +112,40 @@ def record_resolution(pr_number: int, recovered: bool, duration_s: float) -> Non
         _log("WARNING", "case_record_failed", kind="resolution", error=f"{type(e).__name__}: {e}")
 
 
+def memory_stats() -> dict:
+    """Aggregate growth counters for the console's experience panel. Never raises.
+
+    Read-only and cheap: the cases table is day-partitioned and demo-scale, and
+    the console calls this on page load + once after each /approve — not per event.
+    """
+    if not enabled():
+        return {"enabled": False}
+    try:
+        from google.cloud import bigquery  # lazy import
+
+        client = bigquery.Client(project=os.environ.get("GOOGLE_CLOUD_PROJECT") or None)
+        query = f"""
+            SELECT
+              COUNTIF(kind = 'diagnosis') AS learned_cases,
+              COUNTIF(kind = 'resolution' AND recovered) AS verified_recoveries,
+              MIN(IF(kind = 'diagnosis', ts, NULL)) AS first_learned_at,
+              MAX(IF(kind = 'diagnosis', ts, NULL)) AS last_learned_at
+            FROM `{_cases_table()}`
+        """
+        row = next(iter(client.query(query).result(timeout=_BQ_TIMEOUT_S)))
+        return {
+            "enabled": True,
+            "ok": True,
+            "learned_cases": int(row["learned_cases"] or 0),
+            "verified_recoveries": int(row["verified_recoveries"] or 0),
+            "first_learned_at": row["first_learned_at"].isoformat() if row["first_learned_at"] else None,
+            "last_learned_at": row["last_learned_at"].isoformat() if row["last_learned_at"] else None,
+        }
+    except Exception as e:  # noqa: BLE001 - a stats outage must not break the console
+        _log("WARNING", "memory_stats_failed", error=f"{type(e).__name__}: {e}")
+        return {"enabled": True, "ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 def recall_similar_cases(service_name: str) -> dict:
     """Recall AutoSRE's own past incident cases for a service, newest first.
 
