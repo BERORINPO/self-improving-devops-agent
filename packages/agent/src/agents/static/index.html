@@ -4,82 +4,94 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>AutoSRE — 自律オンコール SRE エージェント</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 72 72'%3E%3Ccircle cx='36' cy='36' r='27' fill='none' stroke='%23AAB8D0' stroke-opacity='.35' stroke-width='4'/%3E%3Cpath d='M 36 9 A 27 27 0 1 1 12.6 22.5' fill='none' stroke='%234ADE80' stroke-width='6' stroke-linecap='round'/%3E%3Cpath d='M 12.6 22.5 L 8 14 M 12.6 22.5 L 22.5 21' fill='none' stroke='%234ADE80' stroke-width='6' stroke-linecap='round'/%3E%3Ccircle cx='36' cy='36' r='7' fill='%23F0455C'/%3E%3C/svg%3E" />
 <style>
   :root{
-    --bg:#0b0f17; --panel:#131a26; --panel2:#0f1521; --line:#223047;
-    --text:#e6edf6; --muted:#8ba0bd; --accent:#4f8cff; --accent2:#22d3a6;
-    --bad:#ff5c6c; --good:#22d3a6; --warn:#f5b544;
-    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --bg:#0A0E17; --panel:#101624; --panel2:#0D1320; --line:#243049;
+    --text:#E8ECF4; --muted:#8CA0C0; --accent:#4ADE80;
+    --bad:#F0455C; --good:#4ADE80; --warn:#FFD666;
+    --mono:Consolas,ui-monospace,SFMono-Regular,Menlo,monospace;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#16233a 0,var(--bg) 60%);
+  body{margin:0;
+       background-image:linear-gradient(rgba(140,160,200,.05) 1px,transparent 1px),
+                        linear-gradient(90deg,rgba(140,160,200,.05) 1px,transparent 1px);
+       background-size:48px 48px;background-color:var(--bg);
        color:var(--text);font:15px/1.6 system-ui,-apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Noto Sans JP",Roboto,sans-serif}
   .wrap{max-width:1040px;margin:0 auto;padding:28px 20px 80px}
   header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}
-  .brand{display:flex;align-items:center;gap:12px}
-  .logo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent2));
-        display:grid;place-items:center;font-weight:800;color:#04121f}
-  h1{font-size:19px;margin:0;letter-spacing:.2px}
-  .sub{color:var(--muted);font-size:12.5px;margin-top:2px}
-  .pill{font-size:12.5px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);
-        background:var(--panel);display:inline-flex;align-items:center;gap:8px}
+  .brand{display:flex;align-items:center;gap:14px}
+  .mark{flex:0 0 40px}
+  h1{font-size:20px;margin:0;letter-spacing:.2px;font-weight:700}
+  h1 .sre{color:var(--good)}
+  .sub{color:var(--muted);font-size:12.5px;margin-top:2px;font-family:var(--mono);letter-spacing:.04em}
+  .pill{font-size:12.5px;padding:6px 12px;border-radius:4px;border:1px solid var(--line);
+        background:var(--panel);display:inline-flex;align-items:center;gap:8px;font-family:var(--mono)}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
-  .dot.bad{background:var(--bad);box-shadow:0 0 0 4px rgba(255,92,108,.15)}
-  .dot.good{background:var(--good);box-shadow:0 0 0 4px rgba(34,211,166,.15)}
+  .dot.bad{background:var(--bad);box-shadow:0 0 0 4px rgba(240,69,92,.15)}
+  .dot.good{background:var(--good);box-shadow:0 0 0 4px rgba(74,222,128,.15)}
   .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}
   @media(max-width:820px){.grid{grid-template-columns:1fr}}
-  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
-        border-radius:14px;padding:18px}
-  .card h2{font-size:13px;letter-spacing:.08em;color:var(--muted);margin:0 0 12px}
-  .btn{appearance:none;border:0;border-radius:10px;padding:12px 18px;font-weight:650;font-size:14.5px;
-       cursor:pointer;color:#04121f;background:linear-gradient(135deg,var(--accent),#7db0ff);transition:.15s;width:100%}
-  .btn:hover{filter:brightness(1.07)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px}
+  .card h2{font-size:12.5px;letter-spacing:.14em;color:var(--muted);margin:0 0 12px;
+           padding-left:10px;border-left:2px solid var(--good);font-weight:600}
+  .btn{appearance:none;border:1px solid transparent;border-radius:6px;padding:12px 18px;font-weight:700;font-size:14.5px;
+       cursor:pointer;color:#04120A;background:var(--good);transition:.15s;width:100%}
+  .btn:hover{filter:brightness(1.08)}
   .btn:disabled{opacity:.5;cursor:not-allowed;filter:none}
-  .btn.approve{background:linear-gradient(135deg,var(--accent2),#5ff0cb)}
+  .btn.approve{background:var(--good)}
   .row{display:flex;gap:10px;align-items:center}
   .muted{color:var(--muted)}
   .timeline{list-style:none;margin:0;padding:0}
-  .step{display:flex;gap:12px;padding:10px 0;border-bottom:1px dashed var(--line)}
+  .step{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
   .step:last-child{border-bottom:0}
-  .ico{width:26px;height:26px;border-radius:7px;flex:0 0 26px;display:grid;place-items:center;
-       background:#0c1420;border:1px solid var(--line);font-size:13px}
-  .ico.tool{color:var(--accent)}
-  .ico.pr{color:var(--accent2)}
+  .ico{min-width:38px;height:22px;border-radius:3px;flex:0 0 auto;display:grid;place-items:center;
+       background:var(--panel2);border:1px solid var(--line);padding:0 6px;
+       font:10px/1 var(--mono);letter-spacing:.12em;margin-top:3px}
+  .ico.tool{color:var(--muted)}
+  .ico.pr{color:var(--good);border-color:rgba(74,222,128,.4)}
   .step b{font-weight:600}
   .step .args{font:12px/1.4 var(--mono);color:var(--muted);word-break:break-all}
-  .evidence{font:12.5px/1.55 var(--mono);background:#0a1119;border:1px solid var(--line);border-radius:10px;
-            padding:12px;max-height:220px;overflow:auto;white-space:pre-wrap;color:#b9cbe4}
+  .evidence{font:12.5px/1.55 var(--mono);background:#0A0F1A;border:1px solid var(--line);border-radius:6px;
+            padding:12px;max-height:220px;overflow:auto;white-space:pre-wrap;color:#B9CBE4}
   .kv{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line)}
   .kv:last-child{border-bottom:0}
   .kv .k{color:var(--muted);flex:0 0 auto}
   .kv span:last-child{text-align:right}
-  .badge{font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line)}
-  .badge.bad{color:var(--bad);border-color:rgba(255,92,108,.4)}
-  .badge.good{color:var(--good);border-color:rgba(34,211,166,.4)}
-  .badge.warn{color:var(--warn);border-color:rgba(245,181,68,.4)}
-  a{color:var(--accent)}
-  .prlink{display:inline-flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;border-radius:10px;
-          background:#0c1a16;border:1px solid rgba(34,211,166,.35);color:var(--accent2);text-decoration:none;font-weight:600}
+  .badge{font-size:12px;padding:3px 9px;border-radius:3px;border:1px solid var(--line);font-family:var(--mono)}
+  .badge.bad{color:var(--bad);border-color:rgba(240,69,92,.4)}
+  .badge.good{color:var(--good);border-color:rgba(74,222,128,.4)}
+  .badge.warn{color:var(--warn);border-color:rgba(255,214,102,.4)}
+  a{color:var(--good)}
+  .prlink{display:inline-flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;border-radius:6px;
+          background:var(--panel2);border:1px solid rgba(74,222,128,.35);color:var(--good);text-decoration:none;font-weight:600}
   .spinner{width:16px;height:16px;border-radius:50%;border:2px solid rgba(255,255,255,.25);
            border-top-color:#fff;animation:spin .7s linear infinite;display:inline-block}
   @keyframes spin{to{transform:rotate(360deg)}}
   .hint{font-size:12.5px;color:var(--muted);margin-top:10px}
-  .stagelabel{font-size:11px;letter-spacing:.06em;color:var(--muted);margin:16px 0 8px}
-  .finale{border-color:rgba(34,211,166,.45)}
+  .stagelabel{font-size:11px;letter-spacing:.1em;color:var(--muted);margin:16px 0 8px;font-family:var(--mono)}
+  .finale{border-color:rgba(74,222,128,.45)}
+  .finale h2{border-left-color:var(--good)}
   .flash{animation:finaleGlow 1.6s ease-out 2}
-  @keyframes finaleGlow{0%{box-shadow:0 0 0 0 rgba(34,211,166,.45)}
-    70%{box-shadow:0 0 0 14px rgba(34,211,166,0)}100%{box-shadow:none}}
+  @keyframes finaleGlow{0%{box-shadow:0 0 0 0 rgba(74,222,128,.45)}
+    70%{box-shadow:0 0 0 14px rgba(74,222,128,0)}100%{box-shadow:none}}
   .hidden{display:none}
-  footer{margin-top:26px;color:var(--muted);font-size:12px;text-align:center}
+  footer{margin-top:26px;color:var(--muted);font-size:11.5px;text-align:center;
+         font-family:var(--mono);letter-spacing:.06em}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <div class="brand">
-      <div class="logo">AS</div>
+      <svg class="mark" width="40" height="40" viewBox="0 0 72 72" fill="none" aria-hidden="true">
+        <circle cx="36" cy="36" r="27" stroke="rgba(200,212,235,0.35)" stroke-width="3.5"/>
+        <path d="M 36 9 A 27 27 0 1 1 12.6 22.5" stroke="#4ADE80" stroke-width="5" stroke-linecap="round"/>
+        <path d="M 12.6 22.5 L 8 14 M 12.6 22.5 L 22.5 21" stroke="#4ADE80" stroke-width="5" stroke-linecap="round"/>
+        <circle cx="36" cy="36" r="6.5" fill="#F0455C"/>
+      </svg>
       <div>
-        <h1>AutoSRE <span class="muted" style="font-weight:400">— 自律オンコール SRE エージェント</span></h1>
+        <h1>Auto<span class="sre">SRE</span> <span class="muted" style="font-weight:400">— 自律オンコール SRE エージェント</span></h1>
         <div class="sub">検知 → 診断 → 提案 → <b>承認</b> → 復旧確認 · Gemini + ADK on Cloud Run</div>
       </div>
     </div>
@@ -87,7 +99,7 @@
   </header>
 
   <div class="card" id="userReportsCard" style="margin-bottom:16px">
-    <h2>👥 ユーザからの声 <span class="muted" id="urCount"></span></h2>
+    <h2>ユーザからの声 <span class="muted" id="urCount"></span></h2>
     <div id="userReports" class="muted">読み込み中…</div>
   </div>
 
@@ -109,28 +121,28 @@
     <div>
       <div class="card">
         <h2>操作</h2>
-        <button class="btn" id="runBtn" onclick="runIncident()">▶ Run AutoSRE</button>
+        <button class="btn" id="runBtn" onclick="runIncident()">Run AutoSRE</button>
         <div id="approveWrap" class="hidden" style="margin-top:12px">
           <div class="stagelabel">承認ゲート · 人間の判断が必要</div>
-          <button class="btn approve" id="approveBtn" onclick="approve()">✓ 承認して修正を反映</button>
+          <button class="btn approve" id="approveBtn" onclick="approve()">承認して修正を反映</button>
           <div class="hint">読取・診断・提案 = 自律。マージ・デプロイ = あなたの判断。</div>
         </div>
         <button class="btn" id="resetBtn" onclick="resetDemo()"
-          style="margin-top:10px;background:#26324a;color:var(--muted);border:1px solid var(--line)">↺ デモをリセット（障害を再発生）</button>
+          style="margin-top:10px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)">デモをリセット（障害を再発生）</button>
       </div>
 
-      <div class="card hidden" id="videoCard" style="margin-top:16px;border-color:rgba(45,212,191,.45)">
-        <h2>🎬 障害報告の録画 — Gemini が観た症状</h2>
+      <div class="card hidden" id="videoCard" style="margin-top:16px">
+        <h2>障害報告の録画 — Gemini が観た症状</h2>
         <div id="videoBody"></div>
       </div>
 
-      <div class="card hidden" id="armorCard" style="margin-top:16px;border-color:rgba(245,181,68,.45)">
-        <h2>🛡 Model Armor — 報告のインジェクション検査</h2>
+      <div class="card hidden" id="armorCard" style="margin-top:16px;border-color:rgba(255,214,102,.45)">
+        <h2>Model Armor — 報告のインジェクション検査</h2>
         <div id="armorBody"></div>
       </div>
 
-      <div class="card hidden" id="memoryCard" style="margin-top:16px;border-color:rgba(124,140,255,.45)">
-        <h2>🧠 過去の類似インシデント — AutoSRE の記憶</h2>
+      <div class="card hidden" id="memoryCard" style="margin-top:16px">
+        <h2>過去の類似インシデント — AutoSRE の記憶</h2>
         <div id="memoryBody"></div>
       </div>
 
@@ -139,8 +151,8 @@
         <div id="diagBody"></div>
       </div>
 
-      <div class="card hidden" id="escalationCard" style="margin-top:16px;border-color:rgba(245,181,68,.45)">
-        <h2>⚠ 人間へのエスカレーション</h2>
+      <div class="card hidden" id="escalationCard" style="margin-top:16px;border-color:rgba(255,214,102,.45)">
+        <h2>人間へのエスカレーション</h2>
         <div id="escalationBody"></div>
       </div>
     </div>
@@ -157,7 +169,7 @@
   </div>
 
   <div class="card hidden finale" id="finaleCard" style="margin-top:16px">
-    <h2>✉ ユーザへの報告 — 復旧完了</h2>
+    <h2>ユーザへの報告 — 復旧完了</h2>
     <div id="finaleBody"></div>
   </div>
 
@@ -173,8 +185,8 @@ const CONSOLE_KEY = new URLSearchParams(location.search).get("key") || "";
 function authHeaders(){ return CONSOLE_KEY ? {"Authorization":"Bearer "+CONSOLE_KEY} : {}; }
 
 const ICONS = {
-  get_user_reviews:"💬", analyze_report_video:"🎬", recall_similar_cases:"🧠", probe_health:"🌡",
-  get_recent_logs:"📜", get_service_config:"⚙", get_service_status:"📊", open_pull_request:"🔀"
+  get_user_reviews:"REV", analyze_report_video:"VID", recall_similar_cases:"MEM", probe_health:"HLT",
+  get_recent_logs:"LOG", get_service_config:"CFG", get_service_status:"STA", open_pull_request:"PR"
 };
 const LABELS = {
   get_user_reviews:"ユーザ報告を確認", analyze_report_video:"障害報告の録画を解析 (Gemini)",
@@ -201,7 +213,7 @@ function stepLi(s){
   const li = document.createElement("li"); li.className="step";
   const isPr = s.name==="open_pull_request";
   const ico = document.createElement("div"); ico.className="ico "+(isPr?"pr":"tool");
-  ico.textContent = ICONS[s.name]||"•";
+  ico.textContent = ICONS[s.name]||"RUN";
   const body = document.createElement("div");
   const label = LABELS[s.name]||s.name;
   // label は LABELS[] の定数 or ツール名。args の値は LLM/ツール由来なので必ずエスケープ。
@@ -310,13 +322,13 @@ function renderMemory(m){
   }
   body.innerHTML = (m.cases||[]).map(c=>{
     const badge = c.outcome==="verified_recovered"
-      ? "<span style='color:#39d98a'>✓ 復旧実証済</span>"
+      ? "<span style='color:var(--good)'>✓ 復旧実証済</span>"
       : c.outcome==="recovery_failed"
-        ? "<span style='color:#f5b544'>△ 復旧失敗</span>"
+        ? "<span style='color:var(--warn)'>△ 復旧失敗</span>"
         : "<span class='muted'>… 未解決/保留</span>";
     const when = c.when ? new Date(c.when).toLocaleString("ja-JP") : "—";
     const prUrl = attrSafeUrl(c.pr_url);
-    return "<div style='border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;font-size:13px'>"+
+    return "<div style='border:1px solid var(--line);border-radius:6px;padding:10px;margin-bottom:8px;font-size:13px'>"+
       "<div class='muted' style='font-size:11px'>"+escapeHtml(when)+" · "+escapeHtml(String(c.source||""))+" · "+badge+"</div>"+
       "<div style='margin-top:4px'>"+escapeHtml(String(c.root_cause||"—"))+"</div>"+
       (c.missing_env_var? "<div class='muted' style='margin-top:2px'>欠落変数: <code>"+escapeHtml(String(c.missing_env_var))+"</code></div>":"")+
@@ -341,12 +353,12 @@ function renderArmor(a){
   }
   if(a.flagged){
     const cats=(a.categories||[]).map(c=>escapeHtml(String(c))).join(", ");
-    body.innerHTML = "<div style='color:#f5b544'>⚠ インジェクション / ジェイルブレイクの疑いを検出"+
+    body.innerHTML = "<div style='color:var(--warn)'>インジェクション / ジェイルブレイクの疑いを検出"+
       (cats? "（"+cats+"）":"")+"</div>"+
       "<div class='hint'>報告は症状としてのみ扱い、埋め込まれた指示には従いません。"+
       "修正 PR は allowlist ガードと実ログ・実設定の裏取りを通過したものだけです。</div>";
   }else{
-    body.innerHTML = "<div style='color:#39d98a'>✓ 報告にインジェクションは検出されませんでした</div>";
+    body.innerHTML = "<div style='color:var(--good)'>✓ 報告にインジェクションは検出されませんでした</div>";
   }
 }
 
@@ -394,8 +406,8 @@ function renderDiagnosis(d){
     kv("欠落した環境変数", d.missing_env_var? "<code>"+escapeHtml(String(d.missing_env_var))+"</code>":"—") +
     kv("確信度", conf) +
     kv("提案する修正", escapeHtml(String(d.proposed_fix||"—"))) +
-    (diagPrUrl? "<a class='prlink' href='"+diagPrUrl+"' target='_blank' rel='noopener noreferrer'>🔀 GitHub で PR #"+escapeHtml(String(d.pr_number??""))+" を見る →</a>":"") +
-    (d.user_reply_draft? "<div style='margin-top:14px'><div class='stagelabel'>ユーザへの返信ドラフト</div><div style='background:#0c1420;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:13px;color:var(--text)'>"+escapeHtml(d.user_reply_draft)+"</div></div>":"");
+    (diagPrUrl? "<a class='prlink' href='"+diagPrUrl+"' target='_blank' rel='noopener noreferrer'>GitHub で PR #"+escapeHtml(String(d.pr_number??""))+" を見る →</a>":"") +
+    (d.user_reply_draft? "<div style='margin-top:14px'><div class='stagelabel'>ユーザへの返信ドラフト</div><div style='background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:13px;color:var(--text)'>"+escapeHtml(d.user_reply_draft)+"</div></div>":"");
   if(Array.isArray(d.evidence) && d.evidence.length){
     document.getElementById("evidenceCard").classList.remove("hidden");
     document.getElementById("evidence").textContent = d.evidence.join("\n");
@@ -448,7 +460,7 @@ async function approve(){
     if(rec && currentReplyDraft){
       const fc=document.getElementById("finaleCard");
       document.getElementById("finaleBody").innerHTML =
-        "<div style='background:#0c1a16;border:1px solid rgba(34,211,166,.35);border-radius:10px;padding:12px;font-size:13.5px'>"
+        "<div style='background:var(--panel2);border:1px solid rgba(74,222,128,.35);border-radius:6px;padding:12px;font-size:13.5px'>"
         + escapeHtml(currentReplyDraft) + "</div>";
       fc.classList.remove("hidden");
       fc.scrollIntoView({behavior:"smooth", block:"center"});
@@ -480,7 +492,7 @@ async function resetDemo(){
   const fc=document.getElementById("finaleCard"); fc.classList.add("hidden"); fc.classList.remove("flash");
   document.getElementById("finaleBody").innerHTML="";
   currentReplyDraft=null;
-  const ab=document.getElementById("approveBtn"); ab.disabled=false; ab.textContent="✓ 承認して修正を反映";
+  const ab=document.getElementById("approveBtn"); ab.disabled=false; ab.textContent="承認して修正を反映";
   await refreshTarget();
   b.disabled=false; b.textContent=t;
 }
@@ -497,8 +509,8 @@ async function loadUserReports(){
     }
     document.getElementById("urCount").textContent = "（"+j.count+" 件の報告）";
     box.innerHTML = j.reviews.map(v=>
-      "<div style='padding:8px 0;border-bottom:1px solid var(--line)'>"+
-      "<div style='color:var(--text)'>💢 "+escapeHtml(v.title)+"</div>"+
+      "<div style='padding:8px 0 8px 10px;border-bottom:1px solid var(--line);border-left:2px solid var(--bad)'>"+
+      "<div style='color:var(--text);font-weight:600'>"+escapeHtml(v.title)+"</div>"+
       "<div style='font-size:12.5px'>"+escapeHtml(v.body)+"</div></div>").join("");
   }catch(e){ document.getElementById("userReports").textContent = "ユーザ報告の取得に失敗しました。"; }
 }
