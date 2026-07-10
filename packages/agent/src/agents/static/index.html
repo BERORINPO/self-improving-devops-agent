@@ -319,6 +319,7 @@ function snippetFor(name, s){
       return "録画を視聴 — 再現手順 "+e(s.steps??0)+" 手順 / タイムライン "+e(s.timeline??0)+" 点を抽出";
     case "recall_similar_cases":
       if(s.enabled===false) return "";
+      if(s.ok===false) return "<span class='err'>過去事例の取得失敗 — ライブ証拠で調査を継続</span>";
       return (s.count>0)
         ? "過去事例 <span class='okv'>"+e(s.count)+" 件</span>を想起 — 仮説として実証拠で検証へ"
         : "過去事例なし — 初見のインシデントとして調査";
@@ -329,9 +330,7 @@ function snippetFor(name, s){
         : "HTTP <span class='err'>"+e(s.status_code)+"</span> — 異常を実測";
     case "get_recent_logs": {
       if(s.ok===false) return "<span class='err'>ログ取得失敗</span>";
-      let t = e(s.count??0)+" 行を取得";
-      if(s.first_error) t += "<br><span class='err'>ERROR: "+e(s.first_error)+"</span>";
-      return t;
+      return e(s.count??0)+" 行を取得";
     }
     case "get_service_config":
       if(s.ok===false) return "<span class='err'>設定取得失敗</span>";
@@ -379,6 +378,8 @@ function finalizeRunningSteps(){
 
 // 手動実行中はタイムラインを占有する。周囲イベント(/events)による上書きを防ぐ単一フラグ。
 let runInProgress = false;
+let resetInProgress = false;
+let approveInProgress = false;
 
 // 手動実行(/incident/stream)と自動検知(/events)の両方から呼ばれる共有ハンドラ。
 // 従来 runIncident の es.onmessage 本体と完全に同一の描画を行う。
@@ -409,7 +410,7 @@ function handleAgentEvent(ev){
     finalizeRunningSteps();
     document.getElementById("running").classList.add("hidden");
     runInProgress = false;
-    document.getElementById("runBtn").disabled=false;
+    if(!resetInProgress && !approveInProgress) document.getElementById("runBtn").disabled=false;
     // 1 回の診断 = 1 件の学習 (diagnosis 行が記録される)。カウンタをその場で更新。
     loadConsoleMeta(true);
   }
@@ -437,20 +438,30 @@ function resetTimelineForRun(runningText){
 let es = null;
 
 function runIncident(){
+  if(resetInProgress || approveInProgress || runInProgress) return;
   const btn=document.getElementById("runBtn"); btn.disabled=true;
   runInProgress = true;
   resetTimelineForRun("AutoSRE が稼働中のサービスを調査しています…");
 
   // エージェントの各ステップをリアルタイム配信（Server-Sent Events）
-  es = new EventSource("/incident/stream");
-  es.onmessage = (e)=>{
+  const source = new EventSource("/incident/stream");
+  es = source;
+  source.onmessage = (e)=>{
+    if(es!==source) return;
     let ev; try{ ev = JSON.parse(e.data); }catch(_){ return; }
-    if(ev.type==="done"){ es.close(); }
+    if(ev.type==="done"){
+      source.close();
+      if(es===source) es=null;
+    }
     handleAgentEvent(ev);
   };
-  es.onerror = ()=>{ es.close(); stopRunClock();
+  source.onerror = ()=>{
+    if(es!==source) return;
+    source.close(); es=null; stopRunClock(); finalizeRunningSteps();
     document.getElementById("running").classList.add("hidden");
-    runInProgress = false; btn.disabled=false; };
+    runInProgress = false;
+    if(!resetInProgress && !approveInProgress) btn.disabled=false;
+  };
 }
 
 // 自動検知(Pub/Sub → /events の run_started)でエージェントが起動したときに、
@@ -615,7 +626,12 @@ function renderEscalation(d){
 }
 
 async function approve(){
-  const btn=document.getElementById("approveBtn"); btn.disabled=true;
+  if(approveInProgress || resetInProgress || runInProgress) return;
+  approveInProgress = true;
+  const btn=document.getElementById("approveBtn");
+  const runBtn=document.getElementById("runBtn");
+  const resetBtn=document.getElementById("resetBtn");
+  btn.disabled=true; runBtn.disabled=true; resetBtn.disabled=true;
   btn.innerHTML="<span class='spinner'></span> マージ・再デプロイ中…";
   const card=document.getElementById("recoverCard"); card.classList.remove("hidden");
   document.getElementById("recoverBody").innerHTML="<span class='muted'>PR をマージし、修正を適用し、復旧を確認中…</span>";
@@ -659,36 +675,54 @@ async function approve(){
   }catch(e){
     document.getElementById("recoverBody").innerHTML="<span class='muted'>エラー: "+e+"</span>";
     btn.disabled=false; btn.textContent="再試行";
+  }finally{
+    approveInProgress = false;
+    if(!resetInProgress && !runInProgress){
+      runBtn.disabled=false;
+      resetBtn.disabled=false;
+    }
   }
 }
 
 async function resetDemo(){
+  if(resetInProgress || approveInProgress) return;
+  resetInProgress = true;
   const b=document.getElementById("resetBtn"); b.disabled=true; const t=b.textContent;
+  const runBtn=document.getElementById("runBtn"); runBtn.disabled=true;
   b.innerHTML="<span class='spinner'></span> 障害を再発生中…";
   // run 進行中のリセットに備えた後始末: in-flight stream を閉じ、時計と稼働表示を止める
   // (放置すると timer leak + idle と spinner の同時表示 + 裏 run が timeline に書き続ける)。
-  if(es){ try{ es.close(); }catch(_){} es=null; }
+  const oldSource=es; es=null;
+  if(oldSource){
+    oldSource.onmessage=null; oldSource.onerror=null;
+    try{ oldSource.close(); }catch(_){}
+  }
   stopRunClock();
+  finalizeRunningSteps();
   document.getElementById("running").classList.add("hidden");
   runInProgress = false; ambientRunActive = false;
-  document.getElementById("runBtn").disabled = false;
-  try{ await fetch("/reset",{method:"POST",headers:authHeaders()}); }catch(e){}
-  document.getElementById("timeline").innerHTML="";
-  document.getElementById("timeline").classList.add("hidden");
-  document.getElementById("idle").classList.remove("hidden");
-  document.getElementById("diagCard").classList.add("hidden");
-  document.getElementById("evidenceCard").classList.add("hidden");
-  document.getElementById("approveWrap").classList.add("hidden");
-  document.getElementById("recoverCard").classList.add("hidden");
-  document.getElementById("escalationCard").classList.add("hidden");
-  document.getElementById("memoryCard").classList.add("hidden");
-  document.getElementById("videoCard").classList.add("hidden");
-  const fc=document.getElementById("finaleCard"); fc.classList.add("hidden"); fc.classList.remove("flash");
-  document.getElementById("finaleBody").innerHTML="";
-  currentReplyDraft=null;
-  const ab=document.getElementById("approveBtn"); ab.disabled=false; ab.textContent="承認して修正を反映";
-  await refreshTarget();
-  b.disabled=false; b.textContent=t;
+  try{
+    try{ await fetch("/reset",{method:"POST",headers:authHeaders()}); }catch(e){}
+    document.getElementById("timeline").innerHTML="";
+    document.getElementById("timeline").classList.add("hidden");
+    document.getElementById("idle").classList.remove("hidden");
+    document.getElementById("diagCard").classList.add("hidden");
+    document.getElementById("evidenceCard").classList.add("hidden");
+    document.getElementById("approveWrap").classList.add("hidden");
+    document.getElementById("recoverCard").classList.add("hidden");
+    document.getElementById("escalationCard").classList.add("hidden");
+    document.getElementById("memoryCard").classList.add("hidden");
+    document.getElementById("videoCard").classList.add("hidden");
+    const fc=document.getElementById("finaleCard"); fc.classList.add("hidden"); fc.classList.remove("flash");
+    document.getElementById("finaleBody").innerHTML="";
+    currentReplyDraft=null;
+    const ab=document.getElementById("approveBtn"); ab.disabled=false; ab.textContent="承認して修正を反映";
+    await refreshTarget();
+  }finally{
+    resetInProgress=false;
+    runBtn.disabled=false;
+    b.disabled=false; b.textContent=t;
+  }
 }
 
 function escapeHtml(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
@@ -725,7 +759,7 @@ ambient.onmessage = (e)=>{
   let ev; try{ ev = JSON.parse(e.data); }catch(_){ return; }
   if(ev.type==="run_started"){
     // 手動実行が進行中なら、周囲の run_started は無視して手動実行を上書きしない。
-    if(runInProgress) return;
+    if(runInProgress || resetInProgress || approveInProgress) return;
     ambientRunActive = true;
     resetForAutonomousRun();
   }else{
