@@ -69,6 +69,10 @@ def _mime_for(video_ref: str) -> str:
     return "video/mp4"
 
 
+# Public alias: server.py's /report-video reuses the same extension->MIME mapping.
+mime_for = _mime_for
+
+
 def _parse_json(text: str) -> dict:
     """Tolerantly extract the model's JSON (it sometimes wraps it in code fences)."""
     t = (text or "").strip()
