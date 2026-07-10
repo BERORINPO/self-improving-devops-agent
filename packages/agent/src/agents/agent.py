@@ -121,6 +121,49 @@ def build_agent(model: str = DEFAULT_MODEL) -> LlmAgent:
     )
 
 
+def _summarize_result(name: str, r) -> dict | None:
+    """Compact, console-safe summary of a tool result for the live timeline.
+
+    The console shows these as per-step evidence snippets while the run is in
+    flight ("what did this tool actually find"), so the demo visibly does real
+    work instead of listing tool names. Bounded fields only — never the full
+    payload (logs can be KBs) — and never raises (a summary is decoration).
+    """
+    if not isinstance(r, dict):
+        return None
+    try:
+        if name == "probe_health":
+            return {"ok": r.get("ok"), "status_code": r.get("status_code"),
+                    "healthy": r.get("healthy")}
+        if name == "get_recent_logs":
+            first_error = next(
+                (str(e.get("text") or "")[:160] for e in (r.get("entries") or [])
+                 if isinstance(e, dict)
+                 and str(e.get("severity", "")).upper() in ("ERROR", "CRITICAL", "ALERT")),
+                None)
+            return {"ok": r.get("ok"), "count": r.get("count"), "first_error": first_error}
+        if name == "get_service_config":
+            names = r.get("env_var_names") or []
+            return {"ok": r.get("ok"), "env_count": len(names)}
+        if name == "get_service_status":
+            return {"ok": r.get("ok"),
+                    "latest_ready_revision": r.get("latest_ready_revision")}
+        if name == "open_pull_request":
+            return {"ok": r.get("ok"), "pr_number": r.get("pr_number"),
+                    "pr_url": r.get("pr_url")}
+        if name == "recall_similar_cases":
+            return {"enabled": r.get("enabled"), "count": r.get("count")}
+        if name == "analyze_report_video":
+            return {"enabled": r.get("enabled"), "ok": r.get("ok"),
+                    "steps": len(r.get("reproduction_steps") or []),
+                    "timeline": len(r.get("timeline") or [])}
+        if name == "get_user_reviews":
+            return {"ok": r.get("ok"), "count": r.get("count")}
+    except Exception:  # noqa: BLE001 - a summary is decoration, never break the run
+        return None
+    return None
+
+
 async def run_incident(incident_text: str, model: str = DEFAULT_MODEL) -> dict:
     """Run the agent on an incident.
 
@@ -151,6 +194,9 @@ async def run_incident(incident_text: str, model: str = DEFAULT_MODEL) -> dict:
                 resp.response, dict
             ):
                 step["result"] = resp.response
+            summary = _summarize_result(resp.name, resp.response)
+            if summary is not None:
+                step["summary"] = summary
             steps.append(step)
         if event.is_final_response() and event.content and event.content.parts:
             final_text = "".join(p.text or "" for p in event.content.parts)
@@ -188,6 +234,9 @@ async def run_incident_events(incident_text: str, model: str = DEFAULT_MODEL):
                 resp.response, dict
             ):
                 ev["result"] = resp.response
+            summary = _summarize_result(resp.name, resp.response)
+            if summary is not None:
+                ev["summary"] = summary
             yield ev
         if event.is_final_response() and event.content and event.content.parts:
             yield {

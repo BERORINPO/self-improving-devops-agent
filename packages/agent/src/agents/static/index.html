@@ -43,15 +43,30 @@
   .row{display:flex;gap:10px;align-items:center}
   .muted{color:var(--muted)}
   .timeline{list-style:none;margin:0;padding:0}
-  .step{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .step{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);
+        animation:stepIn .35s ease-out}
+  @keyframes stepIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
   .step:last-child{border-bottom:0}
+  .step>div:nth-child(2){flex:1;min-width:0}
   .ico{min-width:38px;height:22px;border-radius:3px;flex:0 0 auto;display:grid;place-items:center;
        background:var(--panel2);border:1px solid var(--line);padding:0 6px;
        font:10px/1 var(--mono);letter-spacing:.12em;margin-top:3px}
   .ico.tool{color:var(--muted)}
   .ico.pr{color:var(--good);border-color:rgba(74,222,128,.4)}
+  .step.running .ico{color:var(--good);border-color:rgba(74,222,128,.55);
+                     animation:icoPulse 1.2s ease-in-out infinite}
+  @keyframes icoPulse{0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,.3)}
+                      50%{box-shadow:0 0 0 6px rgba(74,222,128,0)}}
+  .step.done .ico{color:var(--good)}
   .step b{font-weight:600}
   .step .args{font:12px/1.4 var(--mono);color:var(--muted);word-break:break-all}
+  .snip{font:12px/1.5 var(--mono);margin-top:3px;color:var(--muted);word-break:break-all}
+  .snip .err{color:var(--bad)}
+  .snip .okv{color:var(--good)}
+  .snip a{color:var(--good);text-decoration:none;font-weight:600}
+  .dur{font:10.5px/1 var(--mono);color:var(--muted);border:1px solid var(--line);
+       border-radius:3px;padding:3px 6px;margin-left:8px;align-self:flex-start;
+       margin-top:5px;flex:0 0 auto}
   .evidence{font:12.5px/1.55 var(--mono);background:#0A0F1A;border:1px solid var(--line);border-radius:6px;
             padding:12px;max-height:220px;overflow:auto;white-space:pre-wrap;color:#B9CBE4}
   .kv{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line)}
@@ -133,6 +148,7 @@
       <ul class="timeline hidden" id="timeline"></ul>
       <div id="running" class="row hidden" style="margin-top:12px">
         <span class="spinner"></span><span class="muted" id="runningText">AutoSRE が稼働中のサービスを調査しています…</span>
+        <span class="muted" id="runClock" style="margin-left:auto;font-family:var(--mono);font-size:12.5px"></span>
       </div>
     </div>
 
@@ -256,7 +272,8 @@ async function refreshTarget(){
 }
 
 function stepLi(s){
-  const li = document.createElement("li"); li.className="step";
+  const li = document.createElement("li"); li.className="step running";
+  li.dataset.tool = s.name; li.dataset.t0 = String(performance.now());
   const isPr = s.name==="open_pull_request";
   const ico = document.createElement("div"); ico.className="ico "+(isPr?"pr":"tool");
   ico.textContent = ICONS[s.name]||"RUN";
@@ -270,6 +287,96 @@ function stepLi(s){
   return li;
 }
 
+// tool_result が届いたら対応する実行中ステップを「完了」に遷移させ、
+// 所要秒数 + サーバ側 summary (実データの要約) をスニペットとして刻む。
+function resolveStep(ev){
+  const tl = document.getElementById("timeline");
+  const li = Array.from(tl.querySelectorAll("li.step.running"))
+    .find(x=>x.dataset.tool===ev.name);
+  if(!li) return;
+  li.classList.remove("running"); li.classList.add("done");
+  const secs = ((performance.now()-Number(li.dataset.t0))/1000).toFixed(1);
+  const dur = document.createElement("div"); dur.className="dur"; dur.textContent = secs+"s";
+  li.appendChild(dur);
+  const snip = snippetFor(ev.name, ev.summary);
+  if(snip){
+    const d = document.createElement("div"); d.className="snip"; d.innerHTML = snip;
+    li.children[1].appendChild(d);
+  }
+}
+
+// summary はサーバ (agent.py の _summarize_result) が実 tool 結果から抽出した bounded な要約。
+// 文字列は tool/LLM 由来がありうるので必ず escapeHtml、URL は attrSafeUrl を通す。
+function snippetFor(name, s){
+  if(!s) return "";
+  const e = (x)=>escapeHtml(String(x));
+  switch(name){
+    case "get_user_reviews":
+      return (typeof s.count==="number") ? s.count+" 件の報告を取得" : "";
+    case "analyze_report_video":
+      if(s.enabled===false) return "";
+      if(s.ok===false) return "<span class='err'>解析失敗 — ログ/設定の証拠で継続</span>";
+      return "録画を視聴 — 再現手順 "+e(s.steps??0)+" 手順 / タイムライン "+e(s.timeline??0)+" 点を抽出";
+    case "recall_similar_cases":
+      if(s.enabled===false) return "";
+      return (s.count>0)
+        ? "過去事例 <span class='okv'>"+e(s.count)+" 件</span>を想起 — 仮説として実証拠で検証へ"
+        : "過去事例なし — 初見のインシデントとして調査";
+    case "probe_health":
+      if(s.ok===false) return "<span class='err'>疎通失敗</span>";
+      return s.healthy
+        ? "HTTP <span class='okv'>"+e(s.status_code)+"</span> — 正常"
+        : "HTTP <span class='err'>"+e(s.status_code)+"</span> — 異常を実測";
+    case "get_recent_logs": {
+      if(s.ok===false) return "<span class='err'>ログ取得失敗</span>";
+      let t = e(s.count??0)+" 行を取得";
+      if(s.first_error) t += "<br><span class='err'>ERROR: "+e(s.first_error)+"</span>";
+      return t;
+    }
+    case "get_service_config":
+      if(s.ok===false) return "<span class='err'>設定取得失敗</span>";
+      return "デプロイ済み環境変数 "+e(s.env_count??0)+" 件を精査";
+    case "get_service_status":
+      return (s.ok!==false && s.latest_ready_revision)
+        ? "revision "+e(s.latest_ready_revision)+" を確認" : "";
+    case "open_pull_request": {
+      if(s.ok===false) return "<span class='err'>PR 起票失敗</span>";
+      const u = attrSafeUrl(s.pr_url);
+      const label = "PR #"+e(s.pr_number??"")+" を起票";
+      return u
+        ? "<a href='"+u+"' target='_blank' rel='noopener noreferrer'>"+label+" →</a>"
+        : "<span class='okv'>"+label+"</span>";
+    }
+  }
+  return "";
+}
+
+// 「いま何をしているか」+ 経過時計。run 中は 1 秒ごとに mm:ss を更新する。
+let runTimerId = null;
+function startRunClock(){
+  stopRunClock();
+  const t0 = performance.now();
+  const tick = ()=>{
+    const s = Math.floor((performance.now()-t0)/1000);
+    document.getElementById("runClock").textContent =
+      "経過 "+Math.floor(s/60)+":"+String(s%60).padStart(2,"0");
+  };
+  tick();
+  runTimerId = setInterval(tick, 1000);
+}
+function stopRunClock(){
+  if(runTimerId){ clearInterval(runTimerId); runTimerId = null; }
+}
+function setWorkingStatus(toolName){
+  const label = LABELS[toolName] || toolName;
+  document.getElementById("runningText").textContent = String(label)+"中…";
+}
+// run 終端 (done / error) の共通後始末: 残った実行中ステップのパルスを止める。
+function finalizeRunningSteps(){
+  document.querySelectorAll("#timeline li.step.running")
+    .forEach(li=>li.classList.remove("running"));
+}
+
 // 手動実行中はタイムラインを占有する。周囲イベント(/events)による上書きを防ぐ単一フラグ。
 let runInProgress = false;
 
@@ -279,13 +386,14 @@ function handleAgentEvent(ev){
   const tl = document.getElementById("timeline");
   if(ev.type==="tool_call"){
     tl.appendChild(stepLi(ev));
-  }else if(ev.type==="tool_result" && ev.name==="analyze_report_video" && ev.result){
-    renderVideo(ev.result);
-  }else if(ev.type==="tool_result" && ev.name==="recall_similar_cases" && ev.result){
-    renderMemory(ev.result);
-  }else if(ev.type==="tool_result" && ev.name==="get_user_reviews" && ev.result && ev.result.armor){
-    renderArmor(ev.result.armor);
+    setWorkingStatus(ev.name);
+  }else if(ev.type==="tool_result"){
+    resolveStep(ev);
+    if(ev.name==="analyze_report_video" && ev.result){ renderVideo(ev.result); }
+    if(ev.name==="recall_similar_cases" && ev.result){ renderMemory(ev.result); }
+    if(ev.name==="get_user_reviews" && ev.result && ev.result.armor){ renderArmor(ev.result.armor); }
   }else if(ev.type==="final"){
+    document.getElementById("runningText").textContent = "診断を確定しています…";
     const d = ev.diagnosis||{}; renderDiagnosis(d);
     currentReplyDraft = d.user_reply_draft || null;
     if(ev.outcome==="escalated" || d.action==="escalate" || d.escalation){
@@ -293,8 +401,12 @@ function handleAgentEvent(ev){
     }else if(d.pr_number){ currentPr=d.pr_number;
       document.getElementById("approveWrap").classList.remove("hidden"); }
   }else if(ev.type==="error"){
+    stopRunClock();
+    finalizeRunningSteps();
     document.getElementById("runningText").textContent = "エラー: "+ev.error;
   }else if(ev.type==="done"){
+    stopRunClock();
+    finalizeRunningSteps();
     document.getElementById("running").classList.add("hidden");
     runInProgress = false;
     document.getElementById("runBtn").disabled=false;
@@ -311,6 +423,7 @@ function resetTimelineForRun(runningText){
   const tl=document.getElementById("timeline"); tl.innerHTML=""; tl.classList.remove("hidden");
   document.getElementById("running").classList.remove("hidden");
   document.getElementById("runningText").textContent=runningText;
+  startRunClock();
   document.getElementById("diagCard").classList.add("hidden");
   document.getElementById("evidenceCard").classList.add("hidden");
   document.getElementById("approveWrap").classList.add("hidden");
@@ -320,19 +433,22 @@ function resetTimelineForRun(runningText){
   document.getElementById("armorCard").classList.add("hidden");
 }
 
+// 手動 run の EventSource。リセット時に in-flight stream を閉じられるよう module スコープに置く。
+let es = null;
+
 function runIncident(){
   const btn=document.getElementById("runBtn"); btn.disabled=true;
   runInProgress = true;
   resetTimelineForRun("AutoSRE が稼働中のサービスを調査しています…");
 
   // エージェントの各ステップをリアルタイム配信（Server-Sent Events）
-  const es = new EventSource("/incident/stream");
+  es = new EventSource("/incident/stream");
   es.onmessage = (e)=>{
     let ev; try{ ev = JSON.parse(e.data); }catch(_){ return; }
     if(ev.type==="done"){ es.close(); }
     handleAgentEvent(ev);
   };
-  es.onerror = ()=>{ es.close();
+  es.onerror = ()=>{ es.close(); stopRunClock();
     document.getElementById("running").classList.add("hidden");
     runInProgress = false; btn.disabled=false; };
 }
@@ -549,6 +665,13 @@ async function approve(){
 async function resetDemo(){
   const b=document.getElementById("resetBtn"); b.disabled=true; const t=b.textContent;
   b.innerHTML="<span class='spinner'></span> 障害を再発生中…";
+  // run 進行中のリセットに備えた後始末: in-flight stream を閉じ、時計と稼働表示を止める
+  // (放置すると timer leak + idle と spinner の同時表示 + 裏 run が timeline に書き続ける)。
+  if(es){ try{ es.close(); }catch(_){} es=null; }
+  stopRunClock();
+  document.getElementById("running").classList.add("hidden");
+  runInProgress = false; ambientRunActive = false;
+  document.getElementById("runBtn").disabled = false;
   try{ await fetch("/reset",{method:"POST",headers:authHeaders()}); }catch(e){}
   document.getElementById("timeline").innerHTML="";
   document.getElementById("timeline").classList.add("hidden");
