@@ -26,9 +26,13 @@ jobs:
         env:
           CONSOLE_KEY: ${{ secrets.JUDGING_CONSOLE_KEY }}
         run: |
+          # Failures are accumulated explicitly — disable errexit so one flaky curl
+          # can't kill the whole sweep (curl exits 23 when --retry meets a 503).
+          set +e
           fail=0
           note() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
-          code() { curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-delay 5 --max-time 30 "$1"; }
+          probe() { local out; out=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$@"); echo "${out:-000}"; }
+          code() { probe --retry 3 --retry-delay 5 "$1"; }
 
           c=$(code "$AGENT_URL/health")
           [ "$c" = "200" ] && note ":white_check_mark: agent /health 200" || { note ":x: agent /health -> $c (expected 200)"; fail=1; }
@@ -38,7 +42,8 @@ jobs:
           [ "$ok" = "True" ] && note ":white_check_mark: /smoke overall_ok" || { note ":x: /smoke overall_ok -> $ok"; fail=1; }
 
           # 503 = armed (normal); 200 = recovered, hourly re-arm scheduler will restore.
-          c=$(code "$TARGET_URL/health")
+          # No --retry here: 503 is the EXPECTED answer, and curl treats it as transient.
+          c=$(probe "$TARGET_URL/health")
           case "$c" in
             503) note ":white_check_mark: target 503 (armed)";;
             200) note ":warning: target 200 (recovered — hourly re-arm pending, not a failure)";;
@@ -53,7 +58,7 @@ jobs:
           [ "$c" = "200" ] && note ":white_check_mark: console page 200" || { note ":x: console page -> $c (expected 200)"; fail=1; }
 
           # -d '' sends Content-Length: 0 — Google frontend 411s a bodyless POST before it reaches the gate.
-          c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST -d '' "$AGENT_URL/reset?key=sweep-invalid-probe")
+          c=$(probe -X POST -d '' "$AGENT_URL/reset?key=sweep-invalid-probe")
           [ "$c" = "401" ] && note ":white_check_mark: mutation gate 401 on invalid key (armed)" || { note ":x: mutation gate -> $c on invalid key (expected 401)"; fail=1; }
 
           if [ -n "$CONSOLE_KEY" ]; then
