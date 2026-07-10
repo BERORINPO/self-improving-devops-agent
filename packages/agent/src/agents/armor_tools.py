@@ -177,8 +177,9 @@ def clause(verdict: dict) -> str:
     Used by the alert-payload path (server /pubsub/incident), where the untrusted
     text is spliced straight into the instruction. The user-report path does NOT
     need it: there the verdict rides inside the get_user_reviews tool RESULT (a
-    function response, not an instruction) and the standing INSTRUCTION rule in
-    agent.py already tells the model how to treat a flagged report."""
+    function response, not an instruction) and the standing instruction rules in
+    agent.py (build_instruction) already tell the model how to treat a flagged
+    report."""
     if not verdict or not verdict.get("flagged"):
         return ""
     return (

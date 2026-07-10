@@ -14,7 +14,7 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from agents.case_store import recall_similar_cases
-from agents.github_tools import ALLOWED_ENV_VARS, get_user_reviews, open_pull_request
+from agents.github_tools import allowed_env_vars, get_user_reviews, open_pull_request
 from agents.tools import (
     get_recent_logs,
     get_service_config,
@@ -28,11 +28,12 @@ DEFAULT_MODEL = os.environ.get("AUTOSRE_MODEL", "gemini-2.5-flash")
 
 # The allowed remediation set is injected into the instruction so the model's
 # remediation policy matches the hard backstop enforced in
-# github_tools.open_pull_request(). Both read the same AUTOSRE_ALLOWED_ENV_VARS
-# default, so behavior is byte-identical when the env var is unset.
-_ALLOWED_ENV_VARS_TEXT = sorted(ALLOWED_ENV_VARS)
-
-INSTRUCTION = f"""You are AutoSRE, an autonomous on-call SRE agent for Google Cloud Run.
+# github_tools.open_pull_request(). Both read AUTOSRE_ALLOWED_ENV_VARS at call
+# time, so instruction and guard can never disagree — including under the eval
+# harness's scenario-scoped env.
+def build_instruction() -> str:
+    allowed_env_vars_text = sorted(allowed_env_vars())
+    return f"""You are AutoSRE, an autonomous on-call SRE agent for Google Cloud Run.
 
 You are given an incident about a target Cloud Run service. Investigate it end to
 end using your tools, then produce a grounded diagnosis. Do NOT guess — every claim
@@ -67,7 +68,7 @@ CRITICAL grounding rules (do not violate):
 - If probe_health returns HTTP 200 (healthy) and the config looks complete, the service is actually healthy: set missing_env_var=null, low confidence, proposed_fix "no action needed - service appears healthy; user reports may be stale", do NOT call open_pull_request, and leave pr_url/pr_number null.
 
 Remediation policy: you may auto-remediate ONLY missing environment variables in
-this allowed set: {_ALLOWED_ENV_VARS_TEXT}.
+this allowed set: {allowed_env_vars_text}.
 - If the diagnosed missing env var IS in the allowed set: call
   open_pull_request(missing_env_var, root_cause) EXACTLY ONCE to open a REAL pull
   request that restores it, set "action":"fix_pr", use the returned pr_url/pr_number,
@@ -106,7 +107,7 @@ def build_agent(model: str = DEFAULT_MODEL) -> LlmAgent:
     return LlmAgent(
         name="autosre",
         model=model,
-        instruction=INSTRUCTION,
+        instruction=build_instruction(),
         tools=[
             get_user_reviews,
             analyze_report_video,
