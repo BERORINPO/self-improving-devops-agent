@@ -1,0 +1,65 @@
+name: judging-window-sweep
+
+# Daily passive sweep during the judging window (Jul 13-24, 09:00 JST).
+# Complements the 5-min Cloud Monitoring uptime check on /health by also
+# verifying /smoke wiring, target armed state, and the console auth gate.
+# Read-only: no deploys, no writes — safe under the judging-window freeze.
+on:
+  schedule:
+    - cron: '0 0 13-24 7 *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AGENT_URL: https://sida-agent-860561433627.asia-northeast1.run.app
+  TARGET_URL: https://sida-target-860561433627.asia-northeast1.run.app
+
+jobs:
+  sweep:
+    name: passive sweep (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: sweep
+        shell: bash
+        env:
+          CONSOLE_KEY: ${{ secrets.JUDGING_CONSOLE_KEY }}
+        run: |
+          fail=0
+          note() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          code() { curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-delay 5 --max-time 30 "$1"; }
+
+          c=$(code "$AGENT_URL/health")
+          [ "$c" = "200" ] && note ":white_check_mark: agent /health 200" || { note ":x: agent /health -> $c (expected 200)"; fail=1; }
+
+          smoke=$(curl -s --retry 3 --retry-delay 5 --max-time 30 "$AGENT_URL/smoke" || echo '{}')
+          ok=$(echo "$smoke" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("overall_ok"))' 2>/dev/null || echo parse_error)
+          [ "$ok" = "True" ] && note ":white_check_mark: /smoke overall_ok" || { note ":x: /smoke overall_ok -> $ok"; fail=1; }
+
+          # 503 = armed (normal); 200 = recovered, hourly re-arm scheduler will restore.
+          c=$(code "$TARGET_URL/health")
+          case "$c" in
+            503) note ":white_check_mark: target 503 (armed)";;
+            200) note ":warning: target 200 (recovered — hourly re-arm pending, not a failure)";;
+            *)   note ":x: target /health -> $c (expected 503 or 200)"; fail=1;;
+          esac
+
+          c=$(code "$AGENT_URL/")
+          case "$c" in
+            401|403) note ":white_check_mark: console without key -> $c (auth gate intact)";;
+            *)       note ":x: console without key -> $c (expected 401/403)"; fail=1;;
+          esac
+
+          if [ -n "$CONSOLE_KEY" ]; then
+            c=$(code "$AGENT_URL/?key=$CONSOLE_KEY")
+            [ "$c" = "200" ] && note ":white_check_mark: console with key 200" || { note ":x: console with key -> $c (expected 200)"; fail=1; }
+          else
+            note ":warning: JUDGING_CONSOLE_KEY secret not set — skipped keyed console check"
+          fi
+
+          meta=$(curl -s --retry 3 --retry-delay 5 --max-time 30 "$AGENT_URL/console-meta" || echo '{}')
+          video=$(echo "$meta" | python3 -c 'import json,sys; print(json.load(sys.stdin)["video"]["available"])' 2>/dev/null || echo parse_error)
+          [ "$video" = "True" ] && note ":white_check_mark: /console-meta video available" || { note ":x: /console-meta video.available -> $video"; fail=1; }
+
+          exit $fail
