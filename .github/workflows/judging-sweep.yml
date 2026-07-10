@@ -45,11 +45,16 @@ jobs:
             *)   note ":x: target /health -> $c (expected 503 or 200)"; fail=1;;
           esac
 
+          # The console page itself is served keyless by design (no secrets in the HTML);
+          # the key gates mutations. Probe the gate with an invalid key: 401 = armed.
+          # Side-effect-free — /reset only executes if the gate is broken, and even then
+          # it merely re-arms the target to its normal idle state.
           c=$(code "$AGENT_URL/")
-          case "$c" in
-            401|403) note ":white_check_mark: console without key -> $c (auth gate intact)";;
-            *)       note ":x: console without key -> $c (expected 401/403)"; fail=1;;
-          esac
+          [ "$c" = "200" ] && note ":white_check_mark: console page 200" || { note ":x: console page -> $c (expected 200)"; fail=1; }
+
+          # -d '' sends Content-Length: 0 — Google frontend 411s a bodyless POST before it reaches the gate.
+          c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST -d '' "$AGENT_URL/reset?key=sweep-invalid-probe")
+          [ "$c" = "401" ] && note ":white_check_mark: mutation gate 401 on invalid key (armed)" || { note ":x: mutation gate -> $c on invalid key (expected 401)"; fail=1; }
 
           if [ -n "$CONSOLE_KEY" ]; then
             c=$(code "$AGENT_URL/?key=$CONSOLE_KEY")
