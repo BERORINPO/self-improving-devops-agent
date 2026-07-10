@@ -234,10 +234,10 @@ class ApproveRequest(BaseModel):
 def approve(req: ApproveRequest, request: Request) -> dict:
     """Human-gated recovery: merge the fix PR, apply the env fix, verify the target is healthy."""
     _check_console_key(request)
-    from agents.github_tools import ALLOWED_ENV_VARS
+    from agents.github_tools import allowed_env_vars
     from agents.recovery import apply_env_fix, merge_pull_request, verify_recovery
 
-    if req.env_var not in ALLOWED_ENV_VARS:
+    if req.env_var not in allowed_env_vars():
         return {
             "ok": False,
             "error": f"'{req.env_var}' is not in the allowed remediation set; escalated vars require manual operation",

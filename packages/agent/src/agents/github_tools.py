@@ -21,11 +21,19 @@ CONFIG_PATH = os.environ.get("TARGET_CONFIG_PATH", "deploy/target-service.env")
 # Safety guard: the agent may only open PRs that restore an env var on this allowlist.
 # This stops a hallucinated or prompt-injected "fix" (e.g. SECRET_KEY) from ever
 # becoming a real PR, no matter what the model outputs.
-ALLOWED_ENV_VARS = {
-    v.strip()
-    for v in os.environ.get("AUTOSRE_ALLOWED_ENV_VARS", "DATABASE_URL").split(",")
-    if v.strip()
-}
+def allowed_env_vars() -> set:
+    """The remediation allowlist, read from env at CALL time (not import time).
+
+    Production sets AUTOSRE_ALLOWED_ENV_VARS once at deploy, so behavior there is
+    identical to a module constant. Call-time reading matters for eval REAL mode,
+    where scenario-scoped env (e.g. S02's extended allowlist) must reach both this
+    guard and the agent instruction built from it.
+    """
+    return {
+        v.strip()
+        for v in os.environ.get("AUTOSRE_ALLOWED_ENV_VARS", "DATABASE_URL").split(",")
+        if v.strip()
+    }
 
 
 def _repo() -> str:
@@ -95,11 +103,12 @@ def open_pull_request(missing_env_var: str, root_cause: str) -> dict:
     """
     try:
         repo = _repo()
-        if missing_env_var not in ALLOWED_ENV_VARS:
+        allowed = allowed_env_vars()
+        if missing_env_var not in allowed:
             return {
                 "ok": False,
                 "error": f"'{missing_env_var}' is not in the allowed remediation set "
-                f"{sorted(ALLOWED_ENV_VARS)}; refusing to open a PR (safety guard against "
+                f"{sorted(allowed)}; refusing to open a PR (safety guard against "
                 f"hallucinated or injected fixes)",
             }
         # The canonical restore value is configured out-of-band (not guessed by
