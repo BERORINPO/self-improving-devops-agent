@@ -88,13 +88,14 @@ def _logging_smoke() -> dict:
 
         project = os.environ["GOOGLE_CLOUD_PROJECT"]
         client = gcloud_logging.Client(project=project)
+        # /smoke is unauthenticated: prove the Logging read happened (count +
+        # severities) but never return raw payload text, which can carry secrets.
         recent: list[str] = []
         for entry in client.list_entries(order_by=gcloud_logging.DESCENDING, page_size=5):
-            payload = getattr(entry, "payload", None)
-            recent.append(str(payload)[:160] if payload is not None else f"<{entry.severity}>")
+            recent.append(str(getattr(entry, "severity", None) or "DEFAULT"))
             if len(recent) >= 3:
                 break
-        return {"ok": True, "count": len(recent), "recent": recent}
+        return {"ok": True, "count": len(recent), "recent_severities": recent}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
