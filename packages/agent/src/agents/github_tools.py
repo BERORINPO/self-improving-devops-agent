@@ -28,6 +28,10 @@ def allowed_env_vars() -> set:
     identical to a module constant. Call-time reading matters for eval REAL mode,
     where scenario-scoped env (e.g. S02's extended allowlist) must reach both this
     guard and the agent instruction built from it.
+
+    NOTE: this guard is the injection backstop. If a code path is ever added that
+    sets AUTOSRE_ALLOWED_ENV_VARS from user-controllable input mid-process,
+    re-evaluate call-time reading here first (an attacker could widen the set).
     """
     return {
         v.strip()
